@@ -1,0 +1,40 @@
+# === Never publish ===
+# Secrets. Caspian init writes credentials here.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.token
+credentials*
+secrets*
+
+# Internal planning, strategy, and research — ours, not the judges'.
+plan.md
+research/
+notes/
+TODO.md
+scratch/
+
+# Assistant/tooling personalization — never leaves this machine.
+CLAUDE.md
+.claude/
+.cursor/
+.aider*
+.mcp.json
+
+# Local reference clone of upstream SDK — not our work, not submitted
+caspian-upstream/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local agent state
+*.db
+*.sqlite3
+state/
+logs/
