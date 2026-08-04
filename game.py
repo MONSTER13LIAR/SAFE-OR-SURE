@@ -1,0 +1,307 @@
+"""SAFE OR SURE — three channels, one shared handler, one Mind.
+
+Run:  .venv/bin/python game.py
+
+The handler never branches on message.channel. Rooms are keyed by
+connection_id; the transport IS the map.
+"""
+
+import os
+import random
+import threading
+import time
+
+from caspian_sdk import CommClient
+from caspian_sdk import blocks as b
+
+import deck
+import personas
+from director import Director
+from ledger import ROOMS, Ledger
+from mind import Mind
+
+PERSONA_BY_ROOM = {"telegram": "maria", "discord": "deke", "email": "priya"}
+BLOCK_POLL_SECONDS = (3, 6, 9, 13)  # still `queued` after the last poll => sealed
+
+
+class Game:
+    def __init__(self, client: CommClient):
+        self.client = client
+        self.lock = threading.RLock()
+        self.conn_to_room: dict[str, str] = {}
+        self.conversations: dict[str, str] = {}   # room -> conversation_id
+        self.reset()
+
+    def reset(self):
+        with self.lock:
+            self.mind = Mind()
+            self.ledger = Ledger(self.mind)
+            self.director = Director(self)
+            self.history: dict[str, list[dict]] = {r: [] for r in ROOMS}
+            self.ended_notified = False
+
+    # ------------------------------------------------------------ delivery
+    def deliver_beat(self, room, beat, leak_facts=(), allowed_facts=(),
+                     new_fact=None, notes="", offer_plants=False, inbound=None):
+        led = self.ledger
+        if led.ending or not led.alive.get(room):
+            return
+        if beat != "greet" and not led.opened[room]:
+            return
+        persona = PERSONA_BY_ROOM[room]
+        own = [f for f in self.mind.planted(room) if f is not new_fact]
+        try:
+            turn = personas.persona_turn(
+                persona, self.history[room], beat,
+                own_facts=own, leak_facts=leak_facts,
+                allowed_facts=allowed_facts, new_fact=new_fact, notes=notes,
+            )
+        except Exception as e:
+            print(f"!! persona call failed ({room}/{beat}): {e}")
+            return
+        with self.lock:
+            rec = led.record_turn(room, turn.message, turn.facts_used)
+            self.history[room].append({"who": "you", "text": turn.message})
+        buttons = [{"label": deck.FLAG_LABEL, "value": f"flag:{rec.id}"}]
+        if offer_plants:
+            pool = self.mind.unplanted()
+            for fact in random.sample(pool, min(2, len(pool))):
+                buttons.append({"label": deck.PLANT_PREFIX + fact.label,
+                                "value": f"plant:{fact.id}"})
+            buttons.append({"label": deck.DEFLECT_LABEL, "value": "deflect"})
+        payload = [b.text(turn.message), b.buttons(buttons), b.text(led.hud())]
+        sent = self._send(room, payload, inbound)
+        if sent:
+            rec.message_id = sent.get("id") or (sent.get("message") or {}).get("id")
+            self._watch_for_block(room, rec.message_id)
+        print(f"-> [{room}/{beat}] {persona}: {turn.message!r} facts={turn.facts_used}")
+
+    def _send(self, room, payload_blocks, inbound=None):
+        try:
+            if inbound is not None:
+                return inbound.reply(blocks=payload_blocks)
+            conv = self.conversations.get(room)
+            if conv:
+                return self.client.send_message(conv, blocks=payload_blocks)
+        except Exception as e:
+            print(f"!! send failed ({room}): {e}")
+        return None
+
+    def send_text(self, room, text):
+        try:
+            conv = self.conversations.get(room)
+            if conv:
+                self.client.send_message(conv, text=text)
+        except Exception as e:
+            print(f"!! send failed ({room}): {e}")
+
+    # ------------------------------------------------------------ blocking
+    def _watch_for_block(self, room, message_id):
+        if not message_id or room == "email":
+            return  # email has no block button. That's the thesis.
+
+        def watch():
+            conv = self.conversations.get(room)
+            if not conv:
+                return
+            for _ in range(4):
+                time.sleep(3.5)
+                try:
+                    msgs = self.client.list_messages(conv)
+                except Exception:
+                    return
+                status = next((m.get("status") for m in msgs if m.get("id") == message_id), None)
+                if status not in ("queued", "pending"):
+                    return  # delivered (or unknowable) — room is open
+            self._room_sealed(room)
+
+        threading.Thread(target=watch, daemon=True).start()
+
+    def _room_sealed(self, room):
+        with self.lock:
+            if not self.ledger.alive.get(room) or self.ledger.ending:
+                return
+            result = self.ledger.block(room)
+        print(f"** room sealed: {room}")
+        if result.get("ending"):
+            self.finish()
+        else:
+            self.director.on_block(room, PERSONA_BY_ROOM[room].title())
+
+    # ------------------------------------------------------------ inbound
+    def on_message(self, message):
+        room = self.conn_to_room.get(message.connection_id)
+        if room is None:
+            return
+        self.conversations[room] = message.conversation_id
+        text = (message.text or "").strip()
+        print(f"<- [{room}] {text!r}")
+
+        if text.lower() == "reset":
+            self.reset()
+            message.reply(text=deck.RESET_OK)
+            return
+        if self.ledger.ending:
+            message.reply(text=deck.AFTER_END)
+            return
+        if text.lower() in ("flag", "⚑"):  # text fallback (email has no buttons everywhere)
+            latest = self.ledger.latest_turn(room)
+            if latest:
+                self._handle_flag(room, latest.id, inbound=message)
+            return
+
+        self.history[room].append({"who": "them", "text": text})
+        decision = self.director.on_player_message(room)
+        first_contact = not self.ledger.opened[room]
+        if first_contact:
+            self.ledger.opened[room] = True
+        self.deliver_beat(room, decision["beat"],
+                          leak_facts=decision.get("leak_facts", ()),
+                          offer_plants=decision.get("offer_plants", False),
+                          inbound=message)
+
+    def on_interaction(self, interaction):
+        room = self.conn_to_room.get(interaction.connection_id)
+        value = interaction.value or ""
+        if room is None:
+            return
+        if self.ledger.ending:
+            interaction.reply(text=deck.AFTER_END)
+            return
+        print(f"<- [{room}] tap {value!r}")
+
+        if value == "deflect":
+            interaction.reply(text=deck.DEFLECTED)
+        elif value.startswith("plant:"):
+            fact = self.mind.plant(value.split(":", 1)[1], room)
+            if fact:
+                self.director.on_plant(room, fact)
+                self.deliver_beat(room, "react_plant", new_fact=fact)
+        elif value.startswith("flag:"):
+            self._handle_flag(room, value.split(":", 1)[1], interaction=interaction)
+
+    def _handle_flag(self, room, turn_id, interaction=None, inbound=None):
+        with self.lock:
+            result = self.ledger.flag(turn_id)
+
+        def answer(text):
+            body = f"{text}\n{self.ledger.hud()}"
+            if interaction is not None:
+                interaction.reply(text=body)
+            elif inbound is not None:
+                inbound.reply(text=body)
+
+        verdict = result["verdict"]
+        if verdict == "spent":
+            answer(deck.FLAG_SPENT)
+            return
+        if verdict == "over":
+            return
+        if verdict == "link":
+            a, room_b = result["links"][0]
+            tmpl = deck.LINKED if len(self.ledger.proven) > 1 else deck.LINKED_FIRST
+            answer(tmpl.format(a=a, b=room_b))
+            if result.get("ending"):
+                self.finish()
+            else:
+                self.director.on_correct_flag(room)
+        else:  # old / noise — a wrong flag either way
+            answer(deck.FLAG_OLD_NEWS if verdict == "old" else deck.FLAG_NOISE)
+            if result.get("ending"):
+                self.finish()
+            else:
+                self.director.on_wrong_flag(room, PERSONA_BY_ROOM[room].title())
+
+    # ------------------------------------------------------------ endings
+    def finish(self):
+        with self.lock:
+            if self.ended_notified or not self.ledger.ending:
+                return
+            self.ended_notified = True
+            ending = self.ledger.ending
+        print(f"** ENDING: {ending}")
+        open_alive = [r for r in ROOMS if self.ledger.opened[r] and self.ledger.alive[r]]
+        if ending == "NAMED":
+            for r in open_alive:
+                self.send_text(r, deck.ENDING_NAMED)
+        elif ending == "CORNERED":
+            self.send_text("email", deck.ENDING_CORNERED)
+        elif ending == "SWARMED":
+            for r in open_alive:
+                self.send_text(r, deck.ENDING_SWARMED)
+            self.send_text("email", deck.ENDING_SWARMED_CODA)
+        self._send_case_file(ending)
+
+    def _send_case_file(self, ending):
+        lines = [deck.CASE_HEADER]
+        for t in sorted(self.ledger.turns.values(), key=lambda t: t.ts):
+            for fid in t.facts_used:
+                fact = self.mind.get(fid)
+                if fact is None or fact.origin is None or fact.origin == t.room:
+                    continue
+                tmpl = deck.CASE_CAUGHT if t.flag_verdict == "link" else deck.CASE_MISSED
+                lines.append(tmpl.format(room=t.room, fact=fact.label, origin=fact.origin))
+            if t.flag_verdict in ("old", "noise"):
+                lines.append(deck.CASE_WRONG.format(room=t.room))
+        sealed = sum(1 for r in ROOMS if not self.ledger.alive[r])
+        lines.append(deck.CASE_FOOTER.format(
+            result=ending, used=6 - self.ledger.flags_left, sealed=sealed))
+        conv = self.conversations.get("email")
+        if conv:
+            try:
+                self.client.send_message(conv, text="\n".join(lines))
+            except Exception as e:
+                print(f"!! case file send failed: {e}")
+        else:
+            print("\n".join(lines))
+
+    # ------------------------------------------------------------ ticker
+    def start_ticker(self):
+        def loop():
+            while True:
+                time.sleep(10)
+                try:
+                    self.director.tick()
+                except Exception as e:
+                    print(f"!! tick failed: {e}")
+        threading.Thread(target=loop, daemon=True).start()
+
+
+def connect(client: CommClient, game: Game):
+    email = client.connect_email(username=os.getenv("AGENT_NAME", "kernel"))
+    game.conn_to_room[email["id"]] = "email"
+    print(f"email    {email.get('address')}")
+
+    tg = client.connect_telegram(bot_token=os.environ["TELEGRAM_BOT_TOKEN"])
+    game.conn_to_room[tg["id"]] = "telegram"
+    print(f"telegram {tg['id']} (Maria)")
+
+    if token := os.getenv("DISCORD_BOT_TOKEN"):
+        dc = client.connect_discord(bot_token=token)
+    else:
+        dc = client.get_connection(os.environ["DISCORD_CONNECTION_ID"])
+    game.conn_to_room[dc["id"]] = "discord"
+    print(f"discord  {dc['id']} (Deke)")
+
+
+def main():
+    personas.load_env()
+    client = CommClient()
+    game = Game(client)
+    connect(client, game)
+
+    @client.on_message
+    def handle(message):
+        game.on_message(message)
+
+    @client.on_interaction
+    def tapped(interaction):
+        game.on_interaction(interaction)
+
+    game.start_ticker()
+    print("\nSAFE OR SURE — listening. say hi to any room to start. ctrl-c to stop\n")
+    client.listen()
+
+
+if __name__ == "__main__":
+    main()
