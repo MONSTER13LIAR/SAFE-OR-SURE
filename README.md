@@ -35,7 +35,8 @@ no LLM ever judges the player.
 
 ```
 The Mind      shared fact store, provenance-tagged
-Personas      claude-opus-5, one call per turn, structured output
+Personas      one LLM call per turn, structured output
+              (claude-opus-5, or an open model via Featherless)
 The Director  who speaks next, where, and what it may leak
 The Ledger    links, flags, rooms, endings — deterministic
 Caspian       one handler, all channels; the transport is the map
@@ -45,7 +46,7 @@ Caspian       one handler, all channels; the transport is the map
 
 ```sh
 python -m venv .venv && .venv/bin/pip install caspian-sdk anthropic pydantic
-cp .env.example .env   # fill in the four keys
+cp .env.example .env   # fill in the keys (ANTHROPIC_API_KEY or FEATHERLESS_API_KEY)
 .venv/bin/python game.py
 ```
 
