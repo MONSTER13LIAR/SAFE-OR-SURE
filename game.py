@@ -28,6 +28,7 @@ class Game:
     def __init__(self, client: CommClient):
         self.client = client
         self.lock = threading.RLock()
+        self.room_locks = {r: threading.Lock() for r in ROOMS}
         self.conn_to_room: dict[str, str] = {}
         self.conversations: dict[str, str] = {}   # room -> conversation_id
         self.reset()
@@ -41,8 +42,21 @@ class Game:
             self.ended_notified = False
 
     # ------------------------------------------------------------ delivery
-    def deliver_beat(self, room, beat, leak_facts=(), allowed_facts=(),
+    def deliver_beat(self, room, beat, **kw):
+        """Generate + send off the listen thread; per-room lock keeps each
+        room's turns ordered while a slow model in one room never blocks
+        the others."""
+        threading.Thread(target=self._deliver_now, args=(room, beat),
+                         kwargs=kw, daemon=True).start()
+
+    def _deliver_now(self, room, beat, leak_facts=(), allowed_facts=(),
                      new_fact=None, notes="", offer_plants=False, inbound=None):
+        with self.room_locks[room]:
+            self._generate_and_send(room, beat, leak_facts, allowed_facts,
+                                    new_fact, notes, offer_plants, inbound)
+
+    def _generate_and_send(self, room, beat, leak_facts, allowed_facts,
+                           new_fact, notes, offer_plants, inbound):
         led = self.ledger
         if led.ending or not led.alive.get(room):
             return
@@ -165,31 +179,35 @@ class Game:
         value = interaction.value or ""
         if room is None:
             return
+        # The gateway rejects reply() on interactions ("Can only reply to an
+        # inbound message") — answer through the conversation instead.
+        if interaction.conversation_id:
+            self.conversations[room] = interaction.conversation_id
         if self.ledger.ending:
-            interaction.reply(text=deck.AFTER_END)
+            self.send_text(room, deck.AFTER_END)
             return
         print(f"<- [{room}] tap {value!r}")
 
         if value == "deflect":
-            interaction.reply(text=deck.DEFLECTED)
+            self.send_text(room, deck.DEFLECTED)
         elif value.startswith("plant:"):
             fact = self.mind.plant(value.split(":", 1)[1], room)
             if fact:
                 self.director.on_plant(room, fact)
                 self.deliver_beat(room, "react_plant", new_fact=fact)
         elif value.startswith("flag:"):
-            self._handle_flag(room, value.split(":", 1)[1], interaction=interaction)
+            self._handle_flag(room, value.split(":", 1)[1])
 
-    def _handle_flag(self, room, turn_id, interaction=None, inbound=None):
+    def _handle_flag(self, room, turn_id, inbound=None):
         with self.lock:
             result = self.ledger.flag(turn_id)
 
         def answer(text):
             body = f"{text}\n{self.ledger.hud()}"
-            if interaction is not None:
-                interaction.reply(text=body)
-            elif inbound is not None:
+            if inbound is not None:
                 inbound.reply(text=body)
+            else:
+                self.send_text(room, body)
 
         verdict = result["verdict"]
         if verdict == "spent":
