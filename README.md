@@ -14,12 +14,19 @@ Prove they're one thing. You have six flags.
 we host the game and it costs you (and us) nothing, because it runs on a
 free open model. You just message it from the apps already on your phone:
 
-- **Telegram** — message the bot: this is **Maria**
-- **Discord** — DM the bot: this is **Deke**
-- **Email** — write to the game's address: this is **Priya**
+- **Telegram** — [t.me/Maria_Chats_bot](https://t.me/Maria_Chats_bot) —
+  this is **Maria**. Start here.
+- **Discord** — join [discord.gg/kuhHK7e85n](https://discord.gg/kuhHK7e85n),
+  then DM the bot in the member list — that's **Deke**. (Discord only lets
+  a bot message people who share a server with it; joining is the one tap
+  that opens his door.)
+- **Email** — write to
+  `agt-651f467cb3dac1cde29bbe34-0ade97@agents.trycaspianai.com` —
+  that's **Priya**.
 
-(The bot links and address are in the submission / demo. Say hi anywhere.
-That's the whole tutorial — the game teaches its own verbs by touch.)
+Say hi anywhere. That's the whole tutorial — the game teaches its own verbs
+by touch. (If nobody answers, the instance is between sessions — it's live
+through the judging window.)
 
 ## How to play
 
