@@ -50,8 +50,9 @@ BEATS = {
     "chat": "Reply to what they just said, like yourself. Keep it small.",
     "react_plant": "They just told you something (it's in your facts, marked NEW). React like a person who just heard it. A follow-up question is fine.",
     "leak": "Reply naturally, and work in exactly ONE of the facts marked LEAK, casually, like you've known it all along. Do not draw attention to it. Do not explain how you know. Its id goes in facts_used.",
-    "escalate": "You miss them and it shows. Warmer than ever, a little too familiar. If facts are marked ALLOWED you may fold one in; nothing else.",
+    "escalate": "You miss them and it shows. Warmer than ever, a little too familiar. Write two or three VERY short messages separated by single line breaks — they send as separate texts, like real double-texting. If facts are marked ALLOWED you may fold one in; nothing else.",
     "gaslight": "The beat notes say who they accused. You and the others talked about it and you're kindly worried about them. Bring it up gently, on their side, a bit hurt on the accused one's behalf. Use the fact marked LEAK (the accusation) and put its id in facts_used.",
     "seal_react": "The beat notes say which room went quiet. They shut a door on one of the others. Mention it sideways, warm, completely unbothered, like it's a little funny.",
     "idle": "They've gone quiet on everyone. One line. Miss them, tease them gently about ignoring people. Nice about it.",
+    "casefile": "The game is over and they know everything. Write the two or three flat lines that open your case-file email: what you'll remember about how they played. Your voice, no gloating, no menace, no goodbye speech. The scoring lines below your note are not yours to write.",
 }

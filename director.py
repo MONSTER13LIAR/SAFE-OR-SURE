@@ -78,7 +78,14 @@ class Director:
         """Decide the beat for an inbound message. Returns kwargs for deliver_beat."""
         self.last_player_action = time.time()
         if not self.ledger.opened[room]:
-            return {"beat": "greet", "offer_plants": True}
+            kw = {"beat": "greet", "offer_plants": True}
+            hour = time.localtime().tm_hour
+            if hour >= 23 or hour < 5:
+                # Warmth + knowing too much, in message one. Nothing more
+                # specific than the hour — that starts to cosplay surveillance.
+                kw["notes"] = ("it is the middle of the night where they are. "
+                               "one light tease about being up late is fine")
+            return kw
         if self._quiet(room):
             return {"beat": None}  # it noticed you noticed. no reply.
         self.chat_count[room] += 1

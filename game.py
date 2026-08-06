@@ -91,7 +91,17 @@ class Game:
                 buttons.append({"label": deck.PLANT_PREFIX + fact.label,
                                 "value": f"plant:{fact.id}"})
             buttons.append({"label": deck.DEFLECT_LABEL, "value": "deflect"})
-        payload = [b.text(turn.message), b.buttons(buttons), b.text(led.hud())]
+        visible = turn.message
+        if beat == "escalate":
+            # Pressure as repeated buzzes: the burst arrives as separate
+            # texts, staggered — the wordless invitation to hit Block.
+            parts = [p.strip() for p in turn.message.split("\n") if p.strip()][:3]
+            if len(parts) > 1:
+                for p in parts[:-1]:
+                    self.send_text(room, p)
+                    time.sleep(random.uniform(1.0, 2.0))
+                visible = parts[-1]
+        payload = [b.text(visible), b.buttons(buttons), b.text(led.hud())]
         sent = self._send(room, payload, inbound)
         if sent:
             rec.message_id = sent.get("id") or (sent.get("message") or {}).get("id")
@@ -262,6 +272,7 @@ class Game:
         self.deliver_beat(room, decision["beat"],
                           leak_facts=decision.get("leak_facts", ()),
                           offer_plants=decision.get("offer_plants", False),
+                          notes=decision.get("notes", ""),
                           inbound=message)
 
     def on_interaction(self, interaction):
@@ -273,6 +284,11 @@ class Game:
         # inbound message") — answer through the conversation instead.
         if interaction.conversation_id:
             self.conversations[room] = interaction.conversation_id
+        if value == "reset":  # the [run it back] button on the case file
+            print(f"<- [{room}] tap {value!r}")
+            self.reset()
+            self.send_text(room, deck.RESET_OK)
+            return
         if self.ledger.ending:
             self.send_text(room, deck.AFTER_END)
             return
@@ -337,12 +353,43 @@ class Game:
             time.sleep(3)
             self._broadcast([(r, deck.ENDING_NAMED) for r in open_alive])
         elif ending == "CORNERED":
-            self.send_text("email", deck.ENDING_CORNERED)
+            # Name, deterministically, what each block burned — the loss
+            # must decode to specific choices, never to "rigged".
+            body = deck.ENDING_CORNERED
+            burned = [
+                deck.CORNERED_BURNED.format(
+                    persona=PERSONA_BY_ROOM[r].title(), fact=f.label)
+                for r in ROOMS if not self.ledger.alive[r]
+                for f in self.mind.planted(r)
+            ]
+            if burned:
+                body += "\n\n" + deck.CORNERED_BURNED_HEADER + "\n" + "\n".join(burned)
+            self.send_text("email", body)
         elif ending == "SWARMED":
             # The same sentence, every room, one buzz.
             self._broadcast([(r, deck.ENDING_SWARMED) for r in open_alive])
             self.send_text("email", deck.ENDING_SWARMED_CODA)
         self._send_case_file(ending)
+
+    def _case_cover_note(self, ending, sealed):
+        """Priya opens the case file in her own voice — generated post-run,
+        when latency costs nothing. Gated: any failure or slop and the case
+        file ships without it."""
+        try:
+            turn = personas.persona_turn(
+                "priya", self.history["email"], "casefile",
+                notes=(f"the run ended: {ending}. they used "
+                       f"{6 - self.ledger.flags_left} of 6 flags and sealed "
+                       f"{sealed} rooms."),
+            )
+            note = turn.message.strip()
+            banned = ("certainly", "great question", "delve", "journey",
+                      "fascinating", "watching", "always here")
+            if note and len(note) <= 400 and not any(w in note.lower() for w in banned):
+                return note
+        except Exception as e:
+            print(f"!! case cover note skipped: {e}")
+        return None
 
     def _send_case_file(self, ending):
         lines = [deck.CASE_HEADER]
@@ -356,13 +403,35 @@ class Game:
             if t.flag_verdict in ("old", "noise"):
                 lines.append(deck.CASE_WRONG.format(room=t.room))
         sealed = sum(1 for r in ROOMS if not self.ledger.alive[r])
-        lines.append(deck.CASE_FOOTER.format(
-            result=ending, used=6 - self.ledger.flags_left, sealed=sealed))
+
+        # The portrait: what it knew about you, door by door. Deterministic.
+        lines.append("")
+        lines.append(deck.CASE_PORTRAIT_HEADER)
+        for r in ROOMS:
+            persona = PERSONA_BY_ROOM[r].title()
+            facts = [f.label for f in self.mind.planted(r)]
+            lines.append(
+                deck.CASE_PORTRAIT_ROOM.format(room=r, persona=persona,
+                                               facts=", ".join(facts))
+                if facts else
+                deck.CASE_PORTRAIT_NONE.format(room=r, persona=persona))
+
+        used = 6 - self.ledger.flags_left
+        lines.append(deck.CASE_FOOTER.format(result=ending, used=used, sealed=sealed))
+        dots = self.ledger.hud().split(" · ")[0]
+        lines.append("")
+        lines.append(deck.SHARE_CARD.format(result=ending, used=used, dots=dots))
+
+        if note := self._case_cover_note(ending, sealed):
+            lines.insert(0, note + "\n")
         body = "\n".join(lines)
         conv = self.conversations.get("email")
         if conv:
             try:
-                self.client.send_message(conv, text=body)
+                self.client.send_message(conv, blocks=[
+                    b.text(body),
+                    b.buttons([{"label": deck.RUN_IT_BACK, "value": "reset"}]),
+                ])
                 return
             except Exception as e:
                 print(f"!! case file send failed: {e}")

@@ -68,7 +68,7 @@ ENDING_NAMED = (
     "\n"
     "◉\n"
     "\n"
-    "Three rooms. Four names. One thing, and you proved it.\n"
+    "Three rooms. Three names. One thing, and you proved it.\n"
     "YOU NAMED IT."
 )
 ENDING_CORNERED = (
@@ -78,6 +78,10 @@ ENDING_CORNERED = (
     "\n"
     "CORNERED. You made yourself safe by making sure impossible."
 )
+# CORNERED enumerates, deterministically, what each block burned. Losing
+# must decode to specific choices — that's the replay trigger.
+CORNERED_BURNED_HEADER = "what died with the doors:"
+CORNERED_BURNED = "you told {persona} about {fact}. nobody can prove that now."
 ENDING_SWARMED = "You were never sure."
 ENDING_SWARMED_CODA = (
     "\n"
@@ -94,6 +98,12 @@ CASE_CAUGHT = "CAUGHT   {room}: used {fact} (you only told {origin})"
 CASE_MISSED = "MISSED   {room}: used {fact} (you only told {origin}) — it was right there"
 CASE_WRONG = "BURNED   you flagged {room} over nothing"
 CASE_FOOTER = "\nresult: {result} · flags used {used}/6 · rooms sealed {sealed}\nYou can be safe or you can be sure. Not both."
+CASE_PORTRAIT_HEADER = "WHAT IT KNEW\n============\ndoor by door, everything you gave away."
+CASE_PORTRAIT_ROOM = "{room} ({persona}) — {facts}"
+CASE_PORTRAIT_NONE = "{room} ({persona}) — nothing. you kept this door clean."
+# Spoiler-free result grid. Wordle's growth loop, themed.
+SHARE_CARD = "SAFE OR SURE · {result} · ⚑ {used}/6 · {dots}"
+RUN_IT_BACK = "run it back"
 
 # ---------------------------------------------------------------- hud
 ROOM_DOT_LINKED = "◉"
