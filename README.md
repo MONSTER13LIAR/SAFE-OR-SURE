@@ -8,14 +8,21 @@ you only ever told another one.
 
 Prove they're one thing. You have six flags.
 
-## Play it — nothing to install, nothing to fill in
+## Play it — one tap, nothing to install
 
-**Players set up nothing.** No app, no account, no API key, no config file —
-we host the game and it costs you (and us) nothing, because it runs on a
-free open model. You just message it from the apps already on your phone:
+**Say hi to Maria: [t.me/Maria_Chats_bot](https://t.me/Maria_Chats_bot).**
+That's the entire setup. She hands you the other two doors herself: when
+she asks for your email and you answer, a stranger named Priya emails you
+first — think for a second about how she got your address. And when Deke
+gets impatient, Maria drops his Discord invite in the chat.
 
-- **Telegram** — [t.me/Maria_Chats_bot](https://t.me/Maria_Chats_bot) —
-  this is **Maria**. Start here.
+No app, no account, no API key, no config — we host the game and it costs
+you (and us) nothing, because it runs on a free open model. The game
+teaches its own verbs by touch. (If nobody answers, the instance is
+between sessions — it's live through the judging window.)
+
+Impatient, or skipped Maria's questions? Open the doors yourself:
+
 - **Discord** — join [discord.gg/kuhHK7e85n](https://discord.gg/kuhHK7e85n),
   then DM the bot in the member list — that's **Deke**. (Discord only lets
   a bot message people who share a server with it; joining is the one tap
@@ -23,10 +30,6 @@ free open model. You just message it from the apps already on your phone:
 - **Email** — write to
   `agt-651f467cb3dac1cde29bbe34-0ade97@agents.trycaspianai.com` —
   that's **Priya**.
-
-Say hi anywhere. That's the whole tutorial — the game teaches its own verbs
-by touch. (If nobody answers, the instance is between sessions — it's live
-through the judging window.)
 
 ## How to play
 
@@ -36,7 +39,9 @@ three people. Prove it.
 1. **Talk to them.** Reply like you would to anyone. Under some of their
    messages you'll see buttons like `tell about the beagle` — tapping one
    shares that small fact about your life with **that person only**. That's
-   your ammunition.
+   your ammunition. (And careful: your name, your email, your own typed
+   words — everything a chat gives away for free — is ammunition too.
+   Theirs.)
 2. **Set traps.** Give a fact to exactly one of them, then watch the other
    two. If it ever comes back in a different app, wearing a different name —
    that's not a coincidence. That's evidence.
@@ -111,8 +116,12 @@ Optional but worth it — **the cold open**: set `PLAYER_EMAIL` and
 `PLAYER_DISCORD_ID` to your own handles (Discord: Settings → Advanced →
 Developer Mode, then right-click your name → Copy User ID). Say hi to Maria
 and within half a minute the other two strangers message you first,
-unprompted. The game only ever initiates to those pre-registered handles of
-yours; leave them empty and every room waits for you instead.
+unprompted. Strangers playing your instance don't need any of that: when
+Maria asks for their email in chat and they answer, Priya cold-opens to
+that address instead — the game only ever initiates to a handle the player
+registered or handed over themselves. Set `DISCORD_INVITE_URL` to a
+permanent invite for your bot's server and Maria hands out Deke's door in
+conversation too.
 
 `RUN_PACE=demo` tightens every timer for a ~3–4 minute run (the default pace
 is a 5–6 minute game).

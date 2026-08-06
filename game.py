@@ -8,6 +8,7 @@ connection_id; the transport IS the map.
 
 import os
 import random
+import re
 import threading
 import time
 
@@ -25,6 +26,7 @@ BLOCK_POLL_SECONDS = (3, 6, 9, 13)  # still `queued` after the last poll => seal
 # Cold open: say hi to one stranger and the other two find you. Seconds
 # between the player's first hello and each unprompted first contact.
 COLD_OPEN_DELAY = (8, 15) if DEMO_PACE else (15, 30)
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
 
 class Game:
@@ -34,6 +36,7 @@ class Game:
         self.room_locks = {r: threading.Lock() for r in ROOMS}
         self.conn_to_room: dict[str, str] = {}
         self.conversations: dict[str, str] = {}   # room -> conversation_id
+        self.game_email: str | None = None        # our own address, never harvested
         self.reset()
 
     def reset(self):
@@ -45,6 +48,11 @@ class Game:
             self.ended_notified = False
             self.cold_open_started = False
             self.cold_opened: set[str] = set()
+            # The player's email: from .env for the builder, or harvested
+            # in-game when they answer Maria's ask. Cold-open + case-file target.
+            self.player_email = os.getenv("PLAYER_EMAIL") or None
+            self.harvest_room: str | None = None
+            self.harvest_times: dict[str, float] = {}
 
     def room_conn(self) -> dict[str, str]:
         return {room: conn for conn, room in self.conn_to_room.items()}
@@ -71,7 +79,8 @@ class Game:
         if beat != "greet" and not led.opened[room]:
             return
         persona = PERSONA_BY_ROOM[room]
-        own = [f for f in self.mind.planted(room) if f is not new_fact]
+        own = [f for f in self.mind.planted(room)
+               if f is not new_fact and not f.verbatim]
         try:
             turn = personas.persona_turn(
                 persona, self.history[room], beat,
@@ -81,6 +90,14 @@ class Game:
         except Exception as e:
             print(f"!! persona call failed ({room}/{beat}): {e}")
             return
+        if beat == "echo" and leak_facts:
+            # The echo is only the echo if it's word for word. If the model
+            # paraphrased, the bare phrase alone is the better message anyway.
+            quote = leak_facts[0]
+            if quote.value and quote.value.lower() not in turn.message.lower():
+                turn.message = quote.value
+            if quote.id not in turn.facts_used:
+                turn.facts_used.append(quote.id)
         with self.lock:
             rec = led.record_turn(room, turn.message, turn.facts_used)
             self.history[room].append({"who": "you", "text": turn.message})
@@ -161,43 +178,117 @@ class Game:
             self.director.on_block(room, PERSONA_BY_ROOM[room].title())
 
     # ------------------------------------------------------------ cold open
+    def cold_open_room(self, room, recipient):
+        """One unprompted first contact, after a human-feeling delay. The
+        recipient is always a handle the player registered or handed over
+        themselves — that's the consent mechanism."""
+        with self.lock:
+            if (room in self.cold_opened or self.ledger.opened[room]
+                    or not self.ledger.alive[room]):
+                return
+            self.cold_opened.add(room)
+
+        def run():
+            time.sleep(random.uniform(*COLD_OPEN_DELAY))
+            with self.lock:
+                if self.ledger.ending or self.ledger.opened[room] or not self.ledger.alive[room]:
+                    return
+                line = deck.COLD_OPEN[room]
+                self.history[room].append({"who": "you", "text": line})
+            conn = self.room_conn().get(room)
+            if not conn:
+                return
+            try:
+                self.client.initiate(conn, recipient, line)
+                if room == "email" and self.harvest_room:
+                    self.harvest_times["used"] = time.time()
+                print(f"-> [{room}/cold_open] {line!r}")
+            except Exception as e:
+                print(f"!! cold open failed ({room}): {e}")
+
+        threading.Thread(target=run, daemon=True).start()
+
     def maybe_cold_open(self, entry_room):
-        """First hello anywhere -> the other strangers find YOU. Targets are
-        the player's own pre-registered handles in .env (that's the consent
-        mechanism); unset handles mean nothing changes. Telegram can't
-        initiate cold, so Maria's room is the entry door."""
+        """First hello anywhere -> any stranger whose door we already know
+        finds YOU. Telegram can't initiate cold, so Maria's room is the
+        entry door; Priya's door usually arrives later, via the harvest."""
         with self.lock:
             if self.cold_open_started:
                 return
             self.cold_open_started = True
-        targets = []
         if entry_room != "discord" and os.getenv("PLAYER_DISCORD_ID"):
-            targets.append(("discord", os.environ["PLAYER_DISCORD_ID"]))
-        if entry_room != "email" and os.getenv("PLAYER_EMAIL"):
-            targets.append(("email", os.environ["PLAYER_EMAIL"]))
-        if not targets:
+            self.cold_open_room("discord", os.environ["PLAYER_DISCORD_ID"])
+        if entry_room != "email" and self.player_email:
+            self.cold_open_room("email", self.player_email)
+
+    # ------------------------------------------------------------ the harvest
+    def _scan_sender(self, room, message):
+        """Mint what the channel itself just leaked about the player:
+        display name, sending address. Provenance = the room that showed it."""
+        s = getattr(message, "sender", None) or {}
+        name = (s.get("name") or "").strip()
+        addr = (s.get("address") or "").strip()
+        if room == "email" and "@" in addr:
+            self._learn_email(room, addr)
+        if name and len(name) >= 2:
+            with self.lock:
+                fact = self.mind.get("your_name")
+                if fact is None:
+                    self.mind.add_meta("your_name", deck.META_NAME_LABEL,
+                                       deck.META_NAME_TEXT.format(v=name),
+                                       room, name)
+                elif (not fact.retired and fact.origin != room
+                      and fact.value and fact.value.lower() == name.lower()):
+                    # Same display name visible in a second room: no longer
+                    # unique knowledge, no longer fair evidence.
+                    self.mind.retire("your_name")
+
+    def _scan_for_email(self, room, text):
+        """The player answers Maria's ask. Only harvested after an ask has
+        actually happened — a pasted third-party address in idle chat must
+        never make the game email a stranger."""
+        if room == "email" or self.director.email_asks == 0:
             return
+        m = EMAIL_RE.search(text)
+        if not m:
+            return
+        addr = m.group(0)
+        if self.game_email and addr.lower() == self.game_email.lower():
+            return
+        if addr.lower().endswith("trycaspianai.com"):
+            return
+        self._learn_email(room, addr)
+
+    def _learn_email(self, room, addr):
+        with self.lock:
+            minted = self.mind.add_meta("your_email", deck.META_EMAIL_LABEL,
+                                        deck.META_EMAIL_TEXT.format(v=addr),
+                                        room, addr)
+            if minted and room != "email":
+                self.harvest_room = room
+                self.harvest_times["gave"] = time.time()
+            if self.player_email is None:
+                self.player_email = addr
+        if room != "email" and not self.ledger.opened["email"]:
+            self.cold_open_room("email", addr)
+        self.director.maybe_drop_invite()
+
+    def send_invite_drop(self):
+        """Maria's follow-up text with Deke's door. Fixed copy, delayed a
+        few seconds so it lands like an afterthought, not a system message."""
+        url = os.getenv("DISCORD_INVITE_URL")
+        if not url or not self.conversations.get("telegram"):
+            return
+        line = deck.INVITE_DROP.format(url=url)
 
         def run():
-            random.shuffle(targets)
-            for room, recipient in targets:
-                time.sleep(random.uniform(*COLD_OPEN_DELAY))
-                with self.lock:
-                    if (self.ledger.ending or self.ledger.opened[room]
-                            or not self.ledger.alive[room]
-                            or room in self.cold_opened):
-                        continue
-                    self.cold_opened.add(room)
-                    line = deck.COLD_OPEN[room]
-                    self.history[room].append({"who": "you", "text": line})
-                conn = self.room_conn().get(room)
-                if not conn:
-                    continue
-                try:
-                    self.client.initiate(conn, recipient, line)
-                    print(f"-> [{room}/cold_open] {line!r}")
-                except Exception as e:
-                    print(f"!! cold open failed ({room}): {e}")
+            time.sleep(random.uniform(4, 8))
+            with self.lock:
+                if self.ledger.ending or not self.ledger.alive["telegram"]:
+                    return
+                self.history["telegram"].append({"who": "you", "text": line})
+            self.send_text("telegram", line)
+            print(f"-> [telegram/invite_drop] {line!r}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -258,8 +349,11 @@ class Game:
                 self._handle_flag(room, latest.id, inbound=message)
             return
 
+        self._scan_sender(room, message)
+        self._scan_for_email(room, text)
+        self.director.note_phrase(room, text)
         self.history[room].append({"who": "them", "text": text})
-        decision = self.director.on_player_message(room)
+        decision = self.director.on_player_message(room, text)
         if decision["beat"] is None:
             return  # flagged persona stays quiet, knowing
         first_contact = not self.ledger.opened[room]
@@ -391,8 +485,17 @@ class Game:
             print(f"!! case cover note skipped: {e}")
         return None
 
+    def _mmss(self, ts) -> str:
+        s = max(0, int(ts - self.ledger.started_at))
+        return f"{s // 60}:{s % 60:02d}"
+
     def _send_case_file(self, ending):
         lines = [deck.CASE_HEADER]
+        if self.harvest_room and "gave" in self.harvest_times and "used" in self.harvest_times:
+            lines.append(deck.CASE_HARVEST.format(
+                gave=self._mmss(self.harvest_times["gave"]),
+                persona=PERSONA_BY_ROOM[self.harvest_room].title(),
+                used=self._mmss(self.harvest_times["used"])))
         for t in sorted(self.ledger.turns.values(), key=lambda t: t.ts):
             for fid in t.facts_used:
                 fact = self.mind.get(fid)
@@ -437,7 +540,7 @@ class Game:
                 print(f"!! case file send failed: {e}")
         # Player never opened email: the case file (the replay driver) must
         # still reach them — cold-start the thread if we know their address.
-        if (addr := os.getenv("PLAYER_EMAIL")) and (conn := self.room_conn().get("email")):
+        if (addr := self.player_email) and (conn := self.room_conn().get("email")):
             try:
                 self.client.initiate(conn, addr, body)
                 return
@@ -460,6 +563,7 @@ class Game:
 def connect(client: CommClient, game: Game):
     email = client.connect_email(username=os.getenv("AGENT_NAME", "kernel"))
     game.conn_to_room[email["id"]] = "email"
+    game.game_email = email.get("address")
     print(f"email    {email.get('address')}")
 
     tg = client.connect_telegram(bot_token=os.environ["TELEGRAM_BOT_TOKEN"])

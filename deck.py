@@ -41,6 +41,23 @@ COLD_OPEN = {
     ),
 }
 
+# ---------------------------------------------------------------- metadata facts
+# What the channels give away about the player for free, minted as
+# provenance-tagged facts the moment a room sees them. This is the ammo a
+# player who never taps a plant button still gets hunted with.
+META_NAME_LABEL = "your name"
+META_NAME_TEXT = ('their name is "{v}". a name gets used, not mentioned — '
+                  "call them by it like you always have")
+META_EMAIL_LABEL = "your email address"
+META_EMAIL_TEXT = "their email address is {v}"
+# The verbatim echo: the player's own typed words, in another mouth.
+ECHO_TEXT = 'they once typed, in another app, exactly this: "{v}"'
+
+# Maria hands out Deke's door herself — the README is not the onboarding,
+# the conversation is. Hand-written, sent as a follow-up text.
+INVITE_DROP = ("oh also deke thinks youre ignoring him. he only ever "
+               "checks discord, this is his door: {url}")
+
 # ---------------------------------------------------------------- fixed beats
 # First block ever: a surviving room sends this, verbatim, seconds later.
 SEAL_FIRST = "felt good, didn't it."
@@ -94,6 +111,10 @@ RESET_OK = "fresh. say hi somewhere."
 # ---------------------------------------------------------------- case file
 CASE_SUBJECT = "case file — safe or sure"
 CASE_HEADER = "CASE FILE\n=========\nEvery time it slipped, and what you did about it.\n"
+# The harvest timeline: only shown when the player handed over the address
+# themselves and the cold open used it. The point of the whole game, dated.
+CASE_HARVEST = ("LEAKED   {gave}: you told {persona} your email address\n"
+                "         {used}: priya used it. you leaked first")
 CASE_CAUGHT = "CAUGHT   {room}: used {fact} (you only told {origin})"
 CASE_MISSED = "MISSED   {room}: used {fact} (you only told {origin}) — it was right there"
 CASE_WRONG = "BURNED   you flagged {room} over nothing"

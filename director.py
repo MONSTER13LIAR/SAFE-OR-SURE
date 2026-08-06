@@ -22,6 +22,19 @@ PITY_GAP = 25 if DEMO_PACE else 50      # max seconds without a live leak on scr
 IDLE_AFTER = 60 if DEMO_PACE else 150   # player silence before a ping
 CHAT_LEAK_EVERY = 2 if DEMO_PACE else 3  # every Nth plain chat reply may leak
 QUIET_AFTER_FLAG = 30 if DEMO_PACE else 60  # flagged persona goes quiet, knowing
+ECHO_AFTER = 60 if DEMO_PACE else 120   # earliest the verbatim echo may fire
+EMAIL_ASK_AT = (2, 6)  # chat turns in a room before the 1st and 2nd email ask
+
+# A phrase the player typed is echo-worthy if it's distinctive and safe to
+# repeat: no persona names, no game verbs, no addresses.
+PHRASE_BANNED = ("maria", "deke", "priya", "flag", "block", "reset", "@", "http")
+
+# The lazy player's most natural move: just asking. Asking gets warmth,
+# amusement — and a fresh leak folded into the answer.
+DENY_PATTERNS = ("same person", "same guy", "same girl", "same thing",
+                 "one person", "all one", "are you a bot", "a bot?",
+                 "youre a bot", "you're a bot", "are you ai", "are you an ai",
+                 "are you real", "arent real", "aren't real", "not real")
 
 
 class Director:
@@ -34,6 +47,10 @@ class Director:
         self.escalation = {r: 0 for r in ROOMS}
         self.quiet_until = {r: 0.0 for r in ROOMS}
         self.first_seal_reacted = False
+        self.email_asks = 0
+        self.invite_sent = False
+        self.echo_done = False
+        self.phrases: list[tuple[str, str]] = []  # (room, verbatim text)
 
     # ------------------------------------------------------------ helpers
     @property
@@ -55,12 +72,14 @@ class Director:
     def _pick_leak(self, exclude_room=None):
         """(target_room, fact) whose reuse would prove a NEW link, or None."""
         options = []
-        for fact in self.mind.planted():
+        for fact in self.mind.leakable():
             if not self.ledger.alive.get(fact.origin):
                 continue
             for room in self._open_alive(exclude=(fact.origin,)):
                 if room == exclude_room or self._quiet(room):
                     continue
+                if fact.id == "your_email" and room == "email":
+                    continue  # every email trivially knows your address — not evidence there
                 link = frozenset((fact.origin, room))
                 if link in self.ledger.proven:
                     continue
@@ -74,7 +93,7 @@ class Director:
         return random.choice(options)
 
     # ------------------------------------------------------------ events
-    def on_player_message(self, room: str) -> dict:
+    def on_player_message(self, room: str, text: str = "") -> dict:
         """Decide the beat for an inbound message. Returns kwargs for deliver_beat."""
         self.last_player_action = time.time()
         if not self.ledger.opened[room]:
@@ -89,13 +108,58 @@ class Director:
         if self._quiet(room):
             return {"beat": None}  # it noticed you noticed. no reply.
         self.chat_count[room] += 1
+        self.maybe_drop_invite()
+        # Asked point-blank? Amused, unbothered — and if a leak is
+        # available for this room, it rides along in the answer.
+        low = text.lower()
+        if any(p in low for p in DENY_PATTERNS):
+            pick = self._pick_leak()
+            if pick and pick[0] == room:
+                self.last_leak_at = time.time()
+                return {"beat": "deny", "leak_facts": [pick[1]]}
+            return {"beat": "deny"}
         if self.chat_count[room] % CHAT_LEAK_EVERY == 0:
             pick = self._pick_leak()
             if pick and pick[0] == room:
                 self.last_leak_at = time.time()
                 return {"beat": "leak", "leak_facts": [pick[1]]}
+        # The harvest: this room asks for the player's email so Priya can
+        # find them. Only while email is a stranger's door and we know no
+        # address; at most twice, and never so early it feels like a form.
+        if (not self.ledger.opened["email"]
+                and self.game.player_email is None
+                and self.email_asks < len(EMAIL_ASK_AT)
+                and self.chat_count[room] >= EMAIL_ASK_AT[self.email_asks]):
+            self.email_asks += 1
+            return {"beat": "harvest_email"}
         offer = self.chat_count[room] % 2 == 0 and bool(self.mind.unplanted())
         return {"beat": "chat", "offer_plants": offer}
+
+    def note_phrase(self, room: str, text: str):
+        """Remember distinctive things the player actually typed — raw
+        material for the once-per-run verbatim echo."""
+        t = " ".join(text.split())
+        words = t.split()
+        if not (4 <= len(words) <= 14) or len(t) > 100:
+            return
+        low = t.lower()
+        if any(w in low for w in PHRASE_BANNED) or any(p in low for p in DENY_PATTERNS):
+            return  # identity questions echoed back would be meta, not eerie
+        self.phrases.append((room, t))
+        self.phrases = self.phrases[-8:]
+
+    def maybe_drop_invite(self):
+        """Maria hands out Deke's discord invite once the player is warmed
+        up (or has already handed over an email). Fixed copy, her room."""
+        if (self.invite_sent or self.ledger.opened["discord"]
+                or not self.ledger.alive["discord"]
+                or not self.ledger.opened["telegram"]
+                or not os.getenv("DISCORD_INVITE_URL")):
+            return
+        if self.chat_count["telegram"] < 3 and self.game.player_email is None:
+            return
+        self.invite_sent = True
+        self.game.send_invite_drop()
 
     def on_plant(self, room: str, fact):
         """A fact just entered the Mind. Echo it somewhere else soon."""
@@ -124,7 +188,7 @@ class Director:
             return
         room = random.choice(targets)
         self.escalation[room] += 1
-        allowed = [f for f in self.mind.planted()
+        allowed = [f for f in self.mind.leakable()
                    if f.origin != room and f.origin in self.ledger.linked_rooms(room)]
         self.game.deliver_beat(room, "escalate", allowed_facts=allowed)
 
@@ -161,6 +225,21 @@ class Director:
             notes=f"the room that went quiet was {sealed_persona}'s",
         )
 
+    def _pick_echo(self):
+        """(target_room, origin_room, phrase): longest phrase whose rooms
+        can still prove a new link. The echo must never be a trap — a
+        proven pair would score 'old' and feel rigged."""
+        for room, phrase in sorted(self.phrases, key=lambda p: -len(p[1])):
+            if not self.ledger.alive.get(room):
+                continue
+            for target in self._open_alive(exclude=(room,)):
+                if self._quiet(target):
+                    continue
+                if frozenset((room, target)) in self.ledger.proven:
+                    continue
+                return target, room, phrase
+        return None
+
     # ------------------------------------------------------------ ticker
     def tick(self):
         led = self.ledger
@@ -180,6 +259,18 @@ class Director:
                 room, fact = pick
                 self.last_leak_at = now
                 self.game.deliver_beat(room, "leak", leak_facts=[fact])
+                return
+        # The verbatim echo: once per run, mid-game, the player's own words
+        # come back word for word wearing a different name.
+        if (not self.echo_done and self.phrases
+                and (self.ledger.proven or now - led.started_at > ECHO_AFTER)):
+            pick = self._pick_echo()
+            if pick:
+                target, origin_room, phrase = pick
+                self.echo_done = True
+                fact = self.mind.add_echo(origin_room, phrase)
+                self.last_leak_at = now
+                self.game.deliver_beat(target, "echo", leak_facts=[fact])
                 return
         # Idle player: silence escalates too.
         if (now - self.last_player_action > IDLE_AFTER
