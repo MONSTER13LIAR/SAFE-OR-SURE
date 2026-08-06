@@ -29,6 +29,31 @@ FLAG_LABEL = "⚑ they both said that"
 DEFLECT_LABEL = "deflect"
 PLANT_PREFIX = "tell about "  # + fact label
 
+# ---------------------------------------------------------------- cold open
+# First contact when the game reaches out to YOU. Hand-written: the hook
+# beat happens before any model call, instantly and in-voice. Telegram
+# can't initiate cold (platform rule) — Maria's room is the entry door.
+COLD_OPEN = {
+    "discord": "hey its deke. you never answer anywhere else so lets try here",
+    "email": (
+        "hi. priya here. we overlapped last year, you'd remember the "
+        "tuesday trains if nothing else. how is the new place.\n\np."
+    ),
+}
+
+# ---------------------------------------------------------------- fixed beats
+# First block ever: a surviving room sends this, verbatim, seconds later.
+SEAL_FIRST = "felt good, didn't it."
+
+# The NAMED collapse: each living room stops MID-SENTENCE (ordinary
+# unfinished sentences, never glitch-text), three seconds of nothing,
+# then the card.
+NAMED_CUT = {
+    "telegram": "wait haha ok so the thing about the",
+    "discord": "anyway the",
+    "email": "so. about the",
+}
+
 # ---------------------------------------------------------------- flag results
 LINKED = "⚑ LINKED — {a} and {b} are the same thing."
 LINKED_FIRST = "⚑ LINKED — {a} and {b} are the same thing.\nIt noticed you noticed."

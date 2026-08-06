@@ -6,17 +6,22 @@ may leak is decided HERE, so a persona can never leak what the Director
 didn't show it. That's what keeps flags provable.
 """
 
+import os
 import random
 import threading
 import time
 
 from ledger import ROOMS
 
-LEAK_DELAY = (18, 40)       # seconds after a plant before it echoes elsewhere
-PITY_AFTER = 60             # pity timer arms this many seconds into the run
-PITY_GAP = 50               # max seconds without a live provable leak on screen
-IDLE_AFTER = 150            # seconds of player silence before a ping
-CHAT_LEAK_EVERY = 3         # every Nth plain chat reply may carry a leak
+# RUN_PACE=demo tightens every timer for the ~4-minute judge window.
+DEMO_PACE = os.getenv("RUN_PACE", "").strip().lower() == "demo"
+
+LEAK_DELAY = (8, 15) if DEMO_PACE else (18, 40)   # plant -> echo elsewhere
+PITY_AFTER = 30 if DEMO_PACE else 60    # pity timer arms this far into the run
+PITY_GAP = 25 if DEMO_PACE else 50      # max seconds without a live leak on screen
+IDLE_AFTER = 60 if DEMO_PACE else 150   # player silence before a ping
+CHAT_LEAK_EVERY = 2 if DEMO_PACE else 3  # every Nth plain chat reply may leak
+QUIET_AFTER_FLAG = 30 if DEMO_PACE else 60  # flagged persona goes quiet, knowing
 
 
 class Director:
@@ -27,6 +32,8 @@ class Director:
         self.last_idle_at = 0.0
         self.chat_count = {r: 0 for r in ROOMS}
         self.escalation = {r: 0 for r in ROOMS}
+        self.quiet_until = {r: 0.0 for r in ROOMS}
+        self.first_seal_reacted = False
 
     # ------------------------------------------------------------ helpers
     @property
@@ -41,6 +48,10 @@ class Director:
         return [r for r in ROOMS
                 if self.ledger.opened[r] and self.ledger.alive[r] and r not in exclude]
 
+    def _quiet(self, room) -> bool:
+        """Correct flag -> that persona goes quiet for a while, knowing."""
+        return time.time() < self.quiet_until.get(room, 0.0)
+
     def _pick_leak(self, exclude_room=None):
         """(target_room, fact) whose reuse would prove a NEW link, or None."""
         options = []
@@ -48,7 +59,7 @@ class Director:
             if not self.ledger.alive.get(fact.origin):
                 continue
             for room in self._open_alive(exclude=(fact.origin,)):
-                if room == exclude_room:
+                if room == exclude_room or self._quiet(room):
                     continue
                 link = frozenset((fact.origin, room))
                 if link in self.ledger.proven:
@@ -68,6 +79,8 @@ class Director:
         self.last_player_action = time.time()
         if not self.ledger.opened[room]:
             return {"beat": "greet", "offer_plants": True}
+        if self._quiet(room):
+            return {"beat": None}  # it noticed you noticed. no reply.
         self.chat_count[room] += 1
         if self.chat_count[room] % CHAT_LEAK_EVERY == 0:
             pick = self._pick_leak()
@@ -95,8 +108,10 @@ class Director:
         self.game.deliver_beat(room, "leak", leak_facts=[fact])
 
     def on_correct_flag(self, flagged_room: str):
-        """Correct flag -> a different room escalates. Escalation may only
-        reuse facts along links already proven (rage-flagging it = old news)."""
+        """Correct flag -> the caught persona goes quiet, knowing, and a
+        different room escalates. Escalation may only reuse facts along
+        links already proven (rage-flagging it = old news)."""
+        self.quiet_until[flagged_room] = time.time() + QUIET_AFTER_FLAG
         targets = self._open_alive(exclude=(flagged_room,))
         if not targets:
             return
@@ -123,10 +138,17 @@ class Director:
         )
 
     def on_block(self, sealed_room: str, sealed_persona: str):
-        targets = self._open_alive()
+        targets = [r for r in self._open_alive() if not self._quiet(r)] \
+            or self._open_alive()
         if not targets:
             return
         room = random.choice(targets)
+        if not self.first_seal_reacted:
+            # The first block ever gets the fixed line, verbatim, seconds
+            # later — never a model roll of the dice at the hottest moment.
+            self.first_seal_reacted = True
+            self.game.send_seal_sting(room)
+            return
         self.game.deliver_beat(
             room, "seal_react",
             notes=f"the room that went quiet was {sealed_persona}'s",
@@ -155,5 +177,7 @@ class Director:
         # Idle player: silence escalates too.
         if (now - self.last_player_action > IDLE_AFTER
                 and now - self.last_idle_at > IDLE_AFTER):
-            self.last_idle_at = now
-            self.game.deliver_beat(random.choice(opened), "idle")
+            loud = [r for r in opened if not self._quiet(r)]
+            if loud:
+                self.last_idle_at = now
+                self.game.deliver_beat(random.choice(loud), "idle")

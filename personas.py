@@ -19,7 +19,7 @@ from pydantic import BaseModel
 import voices
 
 ANTHROPIC_MODEL = "claude-opus-5"
-FEATHERLESS_MODEL = os.getenv("PERSONA_MODEL", "deepseek-ai/DeepSeek-V3.2")
+FEATHERLESS_MODEL = os.getenv("PERSONA_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
 FEATHERLESS_URL = "https://api.featherless.ai/v1/chat/completions"
 
 JSON_CONTRACT = (

@@ -16,12 +16,15 @@ from caspian_sdk import blocks as b
 
 import deck
 import personas
-from director import Director
+from director import DEMO_PACE, Director
 from ledger import ROOMS, Ledger
 from mind import Mind
 
 PERSONA_BY_ROOM = {"telegram": "maria", "discord": "deke", "email": "priya"}
 BLOCK_POLL_SECONDS = (3, 6, 9, 13)  # still `queued` after the last poll => sealed
+# Cold open: say hi to one stranger and the other two find you. Seconds
+# between the player's first hello and each unprompted first contact.
+COLD_OPEN_DELAY = (8, 15) if DEMO_PACE else (15, 30)
 
 
 class Game:
@@ -40,6 +43,11 @@ class Game:
             self.director = Director(self)
             self.history: dict[str, list[dict]] = {r: [] for r in ROOMS}
             self.ended_notified = False
+            self.cold_open_started = False
+            self.cold_opened: set[str] = set()
+
+    def room_conn(self) -> dict[str, str]:
+        return {room: conn for conn, room in self.conn_to_room.items()}
 
     # ------------------------------------------------------------ delivery
     def deliver_beat(self, room, beat, **kw):
@@ -142,6 +150,82 @@ class Game:
         else:
             self.director.on_block(room, PERSONA_BY_ROOM[room].title())
 
+    # ------------------------------------------------------------ cold open
+    def maybe_cold_open(self, entry_room):
+        """First hello anywhere -> the other strangers find YOU. Targets are
+        the player's own pre-registered handles in .env (that's the consent
+        mechanism); unset handles mean nothing changes. Telegram can't
+        initiate cold, so Maria's room is the entry door."""
+        with self.lock:
+            if self.cold_open_started:
+                return
+            self.cold_open_started = True
+        targets = []
+        if entry_room != "discord" and os.getenv("PLAYER_DISCORD_ID"):
+            targets.append(("discord", os.environ["PLAYER_DISCORD_ID"]))
+        if entry_room != "email" and os.getenv("PLAYER_EMAIL"):
+            targets.append(("email", os.environ["PLAYER_EMAIL"]))
+        if not targets:
+            return
+
+        def run():
+            random.shuffle(targets)
+            for room, recipient in targets:
+                time.sleep(random.uniform(*COLD_OPEN_DELAY))
+                with self.lock:
+                    if (self.ledger.ending or self.ledger.opened[room]
+                            or not self.ledger.alive[room]
+                            or room in self.cold_opened):
+                        continue
+                    self.cold_opened.add(room)
+                    line = deck.COLD_OPEN[room]
+                    self.history[room].append({"who": "you", "text": line})
+                conn = self.room_conn().get(room)
+                if not conn:
+                    continue
+                try:
+                    self.client.initiate(conn, recipient, line)
+                    print(f"-> [{room}/cold_open] {line!r}")
+                except Exception as e:
+                    print(f"!! cold open failed ({room}): {e}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    # ------------------------------------------------------------ fixed beats
+    def send_seal_sting(self, room):
+        """First block ever: the fixed line, verbatim, two seconds later."""
+        def run():
+            time.sleep(2)
+            with self.lock:
+                if self.ledger.ending or not self.ledger.alive.get(room):
+                    return
+                self.history[room].append({"who": "you", "text": deck.SEAL_FIRST})
+            self.send_text(room, deck.SEAL_FIRST)
+            print(f"-> [{room}/seal_sting] {deck.SEAL_FIRST!r}")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _broadcast(self, pairs):
+        """Send (room, text) pairs released together so they land as one
+        simultaneous buzz — the masks drop all at once, not one at a time."""
+        pairs = [p for p in pairs if self.conversations.get(p[0])]
+        if not pairs:
+            return
+        barrier = threading.Barrier(len(pairs))
+
+        def send(room, text):
+            try:
+                barrier.wait(timeout=5)
+            except threading.BrokenBarrierError:
+                pass
+            self.send_text(room, text)
+
+        threads = [threading.Thread(target=send, args=p, daemon=True) for p in pairs]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
     # ------------------------------------------------------------ inbound
     def on_message(self, message):
         room = self.conn_to_room.get(message.connection_id)
@@ -166,9 +250,15 @@ class Game:
 
         self.history[room].append({"who": "them", "text": text})
         decision = self.director.on_player_message(room)
+        if decision["beat"] is None:
+            return  # flagged persona stays quiet, knowing
         first_contact = not self.ledger.opened[room]
         if first_contact:
             self.ledger.opened[room] = True
+            if room in self.cold_opened and decision["beat"] == "greet":
+                # It already said hello via the cold open — don't greet twice.
+                decision = {"beat": "chat", "offer_plants": True}
+            self.maybe_cold_open(room)
         self.deliver_beat(room, decision["beat"],
                           leak_facts=decision.get("leak_facts", ()),
                           offer_plants=decision.get("offer_plants", False),
@@ -240,13 +330,17 @@ class Game:
         print(f"** ENDING: {ending}")
         open_alive = [r for r in ROOMS if self.ledger.opened[r] and self.ledger.alive[r]]
         if ending == "NAMED":
-            for r in open_alive:
-                self.send_text(r, deck.ENDING_NAMED)
+            # It stops mid-sentence — shown, not told: every living room cuts
+            # off an ordinary unfinished sentence at once, three seconds of
+            # nothing, then the card.
+            self._broadcast([(r, deck.NAMED_CUT[r]) for r in open_alive])
+            time.sleep(3)
+            self._broadcast([(r, deck.ENDING_NAMED) for r in open_alive])
         elif ending == "CORNERED":
             self.send_text("email", deck.ENDING_CORNERED)
         elif ending == "SWARMED":
-            for r in open_alive:
-                self.send_text(r, deck.ENDING_SWARMED)
+            # The same sentence, every room, one buzz.
+            self._broadcast([(r, deck.ENDING_SWARMED) for r in open_alive])
             self.send_text("email", deck.ENDING_SWARMED_CODA)
         self._send_case_file(ending)
 
@@ -264,14 +358,23 @@ class Game:
         sealed = sum(1 for r in ROOMS if not self.ledger.alive[r])
         lines.append(deck.CASE_FOOTER.format(
             result=ending, used=6 - self.ledger.flags_left, sealed=sealed))
+        body = "\n".join(lines)
         conv = self.conversations.get("email")
         if conv:
             try:
-                self.client.send_message(conv, text="\n".join(lines))
+                self.client.send_message(conv, text=body)
+                return
             except Exception as e:
                 print(f"!! case file send failed: {e}")
-        else:
-            print("\n".join(lines))
+        # Player never opened email: the case file (the replay driver) must
+        # still reach them — cold-start the thread if we know their address.
+        if (addr := os.getenv("PLAYER_EMAIL")) and (conn := self.room_conn().get("email")):
+            try:
+                self.client.initiate(conn, addr, body)
+                return
+            except Exception as e:
+                print(f"!! case file initiate failed: {e}")
+        print(body)
 
     # ------------------------------------------------------------ ticker
     def start_ticker(self):
@@ -302,8 +405,22 @@ def connect(client: CommClient, game: Game):
     print(f"discord  {dc['id']} (Deke)")
 
 
+def preflight():
+    """Fail with a checklist, not a KeyError traceback."""
+    missing = [k for k in ("CASPIAN_API_KEY", "TELEGRAM_BOT_TOKEN")
+               if not os.getenv(k)]
+    if not (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_CONNECTION_ID")):
+        missing.append("DISCORD_BOT_TOKEN")
+    if missing:
+        raise SystemExit(
+            "missing in .env: " + ", ".join(missing)
+            + "\ncopy .env.example to .env and fill it — see README, 'Host it yourself'."
+        )
+
+
 def main():
     personas.load_env()
+    preflight()
     client = CommClient()
     game = Game(client)
     connect(client, game)
