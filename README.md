@@ -8,18 +8,23 @@ you only ever told another one.
 
 Prove they're one thing. You have six flags.
 
-## Play it — one tap, nothing to install
+## Play it — nothing to install
 
-**Say hi to Maria: [t.me/Maria_Chats_bot](https://t.me/Maria_Chats_bot).**
-That's the entire setup. She hands you the other two doors herself: when
-she asks for your email and you answer, a stranger named Priya emails you
-first — think for a second about how she got your address. And when Deke
-gets impatient, Maria drops his Discord invite in the chat.
+There is nothing to download, clone, or configure. We host the game; you
+just message it from the apps already on your phone.
 
-No app, no account, no API key, no config — we host the game and it costs
-you (and us) nothing, because it runs on a free open model. The game
-teaches its own verbs by touch. (If nobody answers, the instance is
-between sessions — it's live through the judging window.)
+1. **Tap [t.me/Maria_Chats_bot](https://t.me/Maria_Chats_bot)** on
+   Telegram and say hi. That's the entire setup.
+2. **Answer her questions.** Maria will ask for your email — give it, and
+   a stranger named Priya emails you first. Think for a second about how
+   she got your address. When Deke gets impatient, Maria drops his
+   Discord invite right in the chat; joining is one tap, then DM him.
+3. **That's it — you're playing.** Three rooms, three strangers, and the
+   buttons under their messages teach you the rest by touch.
+
+No app, no account, no API key — it costs you (and us) nothing, because
+it runs on a free open model. (If nobody answers, the instance is between
+sessions — it's live through the judging window.)
 
 Impatient, or skipped Maria's questions? Open the doors yourself:
 
@@ -88,10 +93,11 @@ The Ledger    links, flags, rooms, endings — deterministic
 Caspian       one handler, all channels; the transport is the map
 ```
 
-## Host your own copy (developers only — players never touch this)
+## For developers only — run your own instance
 
-Everything below is for running **your own instance of the engine** — the
-thing we already run for you. If you just want to play, stop reading.
+> **Players: stop here.** You never touch anything below this line — the
+> instance above is already running for you. This section is for
+> developers who want to host their own copy of the engine.
 
 ~10 minutes, four keys:
 
