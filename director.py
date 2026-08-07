@@ -49,6 +49,7 @@ class Director:
         self.first_seal_reacted = False
         self.email_asks = 0
         self.invite_sent = False
+        self.invite_nudged = False
         self.echo_done = False
         self.phrases: list[tuple[str, str]] = []  # (room, verbatim text)
 
@@ -183,6 +184,17 @@ class Director:
         different room escalates. Escalation may only reuse facts along
         links already proven (rage-flagging it = old news)."""
         self.quiet_until[flagged_room] = time.time() + QUIET_AFTER_FLAG
+        # A player with a proven link who never opened Deke's door is in an
+        # unwinnable run and doesn't know it. Maria re-drops the invite,
+        # once, at the moment they're most invested.
+        if (self.invite_sent and not self.invite_nudged
+                and not self.ledger.opened["discord"]
+                and self.ledger.alive["discord"]
+                and self.ledger.opened["telegram"]
+                and self.ledger.alive["telegram"]
+                and os.getenv("DISCORD_INVITE_URL")):
+            self.invite_nudged = True
+            self.game.send_invite_drop(nudge=True)
         targets = self._open_alive(exclude=(flagged_room,))
         if not targets:
             return

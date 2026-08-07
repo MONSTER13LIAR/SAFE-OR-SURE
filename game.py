@@ -273,13 +273,16 @@ class Game:
             self.cold_open_room("email", addr)
         self.director.maybe_drop_invite()
 
-    def send_invite_drop(self):
+    def send_invite_drop(self, nudge=False):
         """Maria's follow-up text with Deke's door. Fixed copy, delayed a
-        few seconds so it lands like an afterthought, not a system message."""
+        few seconds so it lands like an afterthought, not a system message.
+        The nudge is the second, firmer drop — for a player who proved a
+        link but still hasn't opened Deke's room, without which the run
+        can't be won."""
         url = os.getenv("DISCORD_INVITE_URL")
         if not url or not self.conversations.get("telegram"):
             return
-        line = deck.INVITE_DROP.format(url=url)
+        line = (deck.INVITE_NUDGE if nudge else deck.INVITE_DROP).format(url=url)
 
         def run():
             time.sleep(random.uniform(4, 8))
@@ -336,10 +339,19 @@ class Game:
         text = (message.text or "").strip()
         print(f"<- [{room}] {text!r}")
 
-        if text.lower() == "reset":
+        if text.lower() in ("reset", "/reset"):
             self.reset()
             message.reply(text=deck.RESET_OK)
             return
+        if text.lower() == "/start":
+            # Telegram sends this when the player taps Start. After a run
+            # it reads as "again"; mid-run it's just a hello — either way
+            # the literal slash-command must never reach a persona.
+            if self.ledger.ending:
+                self.reset()
+                message.reply(text=deck.RESET_OK)
+                return
+            text = "hi"
         if self.ledger.ending:
             message.reply(text=deck.AFTER_END)
             return

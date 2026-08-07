@@ -14,13 +14,15 @@ There is nothing to download, clone, or configure. We host the game; you
 just message it from the apps already on your phone.
 
 1. **Tap [t.me/Maria_Chats_bot](https://t.me/Maria_Chats_bot)** on
-   Telegram and say hi. That's the entire setup.
-2. **Answer her questions.** Maria will ask for your email — give it, and
-   a stranger named Priya emails you first. Think for a second about how
-   she got your address. When Deke gets impatient, Maria drops his
-   Discord invite right in the chat; joining is one tap, then DM him.
-3. **That's it — you're playing.** Three rooms, three strangers, and the
-   buttons under their messages teach you the rest by touch.
+   Telegram and hit **start** (or just say hi). Maria texts you like she
+   already knows you. That's the entire setup.
+2. **When she asks for your email, give it to her.** Within a minute a
+   stranger named Priya emails you. Think for a second about how she got
+   your address.
+3. **When Maria drops a Discord invite, tap it and DM Deke** (open the
+   server, find Deke in the member list, message him). Three rooms,
+   three strangers — you're playing. The buttons under their messages
+   teach you the rest by touch.
 
 No app, no account, no API key — it costs you (and us) nothing, because
 it runs on a free open model. (If nobody answers, the instance is between
@@ -51,9 +53,11 @@ three people. Prove it.
    two. If it ever comes back in a different app, wearing a different name —
    that's not a coincidence. That's evidence.
 3. **Flag it.** Tap `⚑ they both said that` on any message that uses
-   something its sender couldn't know. Right: you prove a link between two
-   rooms — and somewhere else, someone gets friendlier. Wrong: it's burned,
-   and they start talking about you behind your back. You have **six flags**;
+   something its sender couldn't know. (If your mail app hides the
+   buttons, just reply with the single word `flag` — it flags that
+   sender's latest message.) Right: you prove a link between two rooms —
+   and somewhere else, someone gets friendlier. Wrong: it's burned, and
+   they start talking about you behind your back. You have **six flags**;
    two mistakes are survivable, three end you.
 4. **Block — if you dare.** The block button is real and it works. That
    voice never reaches you again… and every unproven link through that room
@@ -61,8 +65,9 @@ three people. Prove it.
    inbox has no block button.
 
 **The scoreboard** rides under every message:
-`◉–◌–✕ · ⚑ 4 · 2 rooms up` means one room linked into your web, one not
-yet, one sealed; four flags left; two rooms still alive.
+`tg◉ dc✕ em◌ · ⚑ 4 · 2 rooms up` means Telegram is woven into your web
+(◉), Discord is sealed (✕), your inbox isn't linked yet (◌); four flags
+left; two rooms still alive.
 
 **Endings:** weave all three rooms into one web and it stops mid-sentence —
 **NAMED IT**. Seal your way to safety until winning is impossible and you're

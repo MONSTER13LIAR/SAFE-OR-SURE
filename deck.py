@@ -26,7 +26,7 @@ FACTS = [
 
 # ---------------------------------------------------------------- buttons
 FLAG_LABEL = "⚑ they both said that"
-DEFLECT_LABEL = "deflect"
+DEFLECT_LABEL = "say nothing"
 PLANT_PREFIX = "tell about "  # + fact label
 
 # ---------------------------------------------------------------- cold open
@@ -57,6 +57,10 @@ ECHO_TEXT = 'they once typed, in another app, exactly this: "{v}"'
 # the conversation is. Hand-written, sent as a follow-up text.
 INVITE_DROP = ("oh also deke thinks youre ignoring him. he only ever "
                "checks discord, this is his door: {url}")
+# The second drop, once, for a player who proved a link but still hasn't
+# said hi to Deke — without his room the run can't be won.
+INVITE_NUDGE = ("ok deke is officially sulking now. just say hi to him, "
+                "for me: {url}")
 
 # ---------------------------------------------------------------- fixed beats
 # First block ever: a surviving room sends this, verbatim, seconds later.
@@ -130,6 +134,8 @@ RUN_IT_BACK = "run it back"
 ROOM_DOT_LINKED = "◉"
 ROOM_DOT_ALIVE = "◌"
 ROOM_DOT_SEALED = "✕"
+# Which dot is which app — a stranger should never have to memorize order.
+ROOM_TAGS = {"telegram": "tg", "discord": "dc", "email": "em"}
 
 
 def hud_line(dots: str, flags_left: int, alive: int) -> str:

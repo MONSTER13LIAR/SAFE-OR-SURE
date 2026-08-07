@@ -183,10 +183,11 @@ class Ledger:
         dots = []
         for r in ROOMS:
             if not self.alive[r]:
-                dots.append(deck.ROOM_DOT_SEALED)
+                dot = deck.ROOM_DOT_SEALED
             elif r in web and len(web) > 1:
-                dots.append(deck.ROOM_DOT_LINKED)
+                dot = deck.ROOM_DOT_LINKED
             else:
-                dots.append(deck.ROOM_DOT_ALIVE)
+                dot = deck.ROOM_DOT_ALIVE
+            dots.append(deck.ROOM_TAGS[r] + dot)
         alive = sum(self.alive.values())
-        return deck.hud_line("–".join(dots), self.flags_left, alive)
+        return deck.hud_line(" ".join(dots), self.flags_left, alive)
