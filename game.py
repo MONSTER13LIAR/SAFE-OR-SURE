@@ -617,6 +617,24 @@ def start_heartbeat():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"heartbeat on :{port}")
 
+    # Free-tier hosts sleep after ~15 min without inbound traffic on the
+    # public URL, and player messages arrive over the SDK, not HTTP — so
+    # ping our own public URL to stay awake.
+    public_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if public_url:
+        import urllib.request
+
+        def pulse():
+            while True:
+                time.sleep(300)
+                try:
+                    urllib.request.urlopen(public_url, timeout=30).read()
+                except Exception:
+                    pass
+
+        threading.Thread(target=pulse, daemon=True).start()
+        print(f"self-ping every 5 min -> {public_url}")
+
 
 def main():
     personas.load_env()
