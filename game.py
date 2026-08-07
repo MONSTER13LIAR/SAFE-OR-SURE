@@ -591,9 +591,37 @@ def preflight():
         )
 
 
+def start_heartbeat():
+    # Hosts like Render only keep a free web service awake while something
+    # answers HTTP on $PORT; an external pinger hits this every few minutes.
+    port = os.environ.get("PORT")
+    if not port:
+        return
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Pulse(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"three rooms up\n")
+
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("0.0.0.0", int(port)), Pulse)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(f"heartbeat on :{port}")
+
+
 def main():
     personas.load_env()
     preflight()
+    start_heartbeat()
     client = CommClient()
     game = Game(client)
     connect(client, game)

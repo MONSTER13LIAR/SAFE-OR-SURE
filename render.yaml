@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: safe-or-sure
+    runtime: python
+    plan: free
+    buildCommand: pip install caspian-sdk
+    startCommand: python game.py
+    envVars:
+      - key: CASPIAN_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: FEATHERLESS_API_KEY
+        sync: false
+      - key: DISCORD_INVITE_URL
+        sync: false
+      - key: PLAYER_EMAIL
+        sync: false
+      - key: PLAYER_DISCORD_ID
+        sync: false
