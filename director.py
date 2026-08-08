@@ -77,6 +77,15 @@ class Director:
         self.last_player_action = time.time()
         self.idle_pings = 0
 
+    def on_send_failed(self, beat: str, leak_facts=()):
+        """A beat died before reaching the screen. Un-consume the one-shot
+        state, or the run silently loses its echo and the pity timer sits
+        satisfied by a leak nobody saw."""
+        if beat == "echo":
+            self.echo_done = False
+        if leak_facts:
+            self.last_leak_at = 0.0
+
     def _pick_leak(self, exclude_room=None):
         """(target_room, fact) whose reuse would prove a NEW link, or None."""
         options = []

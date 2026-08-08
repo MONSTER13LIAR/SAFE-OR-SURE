@@ -54,6 +54,7 @@ PAGE = r"""<!doctype html>
     stroke: var(--accent);
     stroke-width: 1.5;
     fill: none;
+    transition: opacity .4s ease;
   }
   .weblink.draw { animation: drawin .7s ease forwards; }
   @keyframes drawin { to { stroke-dashoffset: 0; } }
@@ -249,6 +250,12 @@ PAGE = r"""<!doctype html>
     running = inRun;
     ended = !!ending;
 
+    // A fresh run: stale collapse state and link-animation memory die
+    // BEFORE nodes and links render — no one-poll flash of the old web,
+    // and re-proven links get their draw-in again next run.
+    if (ending !== "NAMED" && collapsed) uncollapse();
+    if (!links.length) seenLinks = {};
+
     // layout (rebuild only when the set of rooms changes)
     var key = rooms.map(function (r) { return r && r.id; }).join(",");
     if (key !== roomKey) {
@@ -296,9 +303,7 @@ PAGE = r"""<!doctype html>
     } else if (ending === "CORNERED" || ending === "SWARMED") {
       elState.textContent = ending;
       elState.className = "stateline";
-      if (collapsed) uncollapse();
     } else {
-      if (collapsed) uncollapse();
       if (!inRun) {
         elState.textContent = "three rooms up. say hi to start.";
         elState.className = "stateline dormant";

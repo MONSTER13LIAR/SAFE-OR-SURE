@@ -14,6 +14,10 @@ from mind import Mind
 
 ROOMS = ["telegram", "discord", "email"]
 
+# One counter for the whole process, not per Ledger: buttons outlive runs,
+# so a stale flag:tN tap must miss the new run's turns, never collide.
+_TURN_COUNTER = itertools.count()
+
 
 @dataclass
 class Turn:
@@ -37,7 +41,7 @@ class Ledger:
     flags_left: int = 6
     wrong: int = 0
     ending: str | None = None  # NAMED / CORNERED / SWARMED
-    _turn_counter: itertools.count = field(default_factory=itertools.count, repr=False)
+    _turn_counter: itertools.count = field(default_factory=lambda: _TURN_COUNTER, repr=False)
     started_at: float = field(default_factory=time.time)
 
     # ------------------------------------------------------------ turns

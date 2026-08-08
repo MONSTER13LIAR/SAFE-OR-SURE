@@ -27,8 +27,10 @@ BLOCK_POLL_SECONDS = (3, 6, 9, 13)  # still `queued` after the last poll => seal
 # between the player's first hello and each unprompted first contact.
 COLD_OPEN_DELAY = (8, 15) if DEMO_PACE else (15, 30)
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-DORMANT_RESET = 15 * 60  # abandoned mid-run: quietly free the seat
-ENDED_RESET = 10 * 60    # run over, nobody hit "run it back": same
+# Abandoned mid-run / ended-and-ignored: quietly free the seat. Demo pace
+# shrinks it — a judge's drive-by "hi" must not hold the door for 15 min.
+DORMANT_RESET = 3 * 60 if DEMO_PACE else 15 * 60
+ENDED_RESET = 2 * 60 if DEMO_PACE else 10 * 60
 
 
 class Game:
@@ -47,6 +49,10 @@ class Game:
         with self.lock:
             self.epoch += 1
             self.owners: dict[str, str] = {}  # room -> sender key; one run, one player
+            # The conversation map dies with the run: the next player's
+            # messages (and case file) must never route into the previous
+            # player's threads.
+            self.conversations = {}
             self.ended_at: float | None = None
             self.run_duration: float | None = None
             self.mind = Mind()
@@ -70,19 +76,21 @@ class Game:
         """Generate + send off the listen thread; per-room lock keeps each
         room's turns ordered while a slow model in one room never blocks
         the others."""
-        threading.Thread(target=self._deliver_now, args=(room, beat),
+        threading.Thread(target=self._deliver_now,
+                         args=(room, beat, self.epoch),
                          kwargs=kw, daemon=True).start()
 
-    def _deliver_now(self, room, beat, leak_facts=(), allowed_facts=(),
+    def _deliver_now(self, room, beat, epoch, leak_facts=(), allowed_facts=(),
                      new_fact=None, notes="", offer_plants=False, inbound=None):
         with self.room_locks[room]:
-            self._generate_and_send(room, beat, leak_facts, allowed_facts,
-                                    new_fact, notes, offer_plants, inbound)
+            self._generate_and_send(room, beat, epoch, leak_facts,
+                                    allowed_facts, new_fact, notes,
+                                    offer_plants, inbound)
 
-    def _generate_and_send(self, room, beat, leak_facts, allowed_facts,
+    def _generate_and_send(self, room, beat, epoch, leak_facts, allowed_facts,
                            new_fact, notes, offer_plants, inbound):
         led = self.ledger
-        if led.ending or not led.alive.get(room):
+        if self.epoch != epoch or led.ending or not led.alive.get(room):
             return
         if beat != "greet" and not led.opened[room]:
             return
@@ -107,6 +115,8 @@ class Game:
             # load-bearing beats fall back to fixed lines; the rest skip.
             turn = self._fallback_turn(persona, beat, leak_facts)
             if turn is None:
+                if self.epoch == epoch:
+                    self.director.on_send_failed(beat, leak_facts)
                 return
             print(f"-> [{room}/{beat}] fallback line")
         if beat == "echo" and leak_facts:
@@ -117,7 +127,21 @@ class Game:
                 turn.message = quote.value
             if quote.id not in turn.facts_used:
                 turn.facts_used.append(quote.id)
+        parts = None
+        if beat != "echo" and room != "email":
+            # People double-text. Line breaks arrive as separate messages,
+            # staggered — on escalate, that burst is the wordless invitation
+            # to hit Block. Email stays one message: nobody double-emails.
+            # Overflow folds into the last text instead of being dropped:
+            # the Ledger must only ever score words that actually ship.
+            cap = 3 if beat == "escalate" else 2
+            parts = [p.strip() for p in turn.message.split("\n") if p.strip()]
+            if len(parts) > cap:
+                parts = parts[:cap - 1] + [" ".join(parts[cap - 1:])]
+            turn.message = "\n".join(parts) if parts else turn.message
         with self.lock:
+            if self.epoch != epoch:
+                return  # reset while the model was thinking: dead run's words
             rec = led.record_turn(room, turn.message, turn.facts_used)
             hist_entry = {"who": "you", "text": turn.message}
             self.history[room].append(hist_entry)
@@ -129,26 +153,33 @@ class Game:
                                 "value": f"plant:{fact.id}"})
             buttons.append({"label": deck.DEFLECT_LABEL, "value": "deflect"})
         visible = turn.message
-        if beat != "echo" and room != "email":
-            # People double-text. Line breaks arrive as separate messages,
-            # staggered — on escalate, that burst is the wordless invitation
-            # to hit Block. Email stays one message: nobody double-emails.
-            cap = 3 if beat == "escalate" else 2
-            parts = [p.strip() for p in turn.message.split("\n") if p.strip()][:cap]
-            if len(parts) > 1:
-                for p in parts[:-1]:
-                    self.send_text(room, p)
-                    time.sleep(random.uniform(1.0, 2.0))
-                visible = parts[-1]
+        delivered_part = False
+        if parts and len(parts) > 1:
+            for p in parts[:-1]:
+                if self.epoch != epoch:
+                    return
+                delivered_part = self.send_text(room, p) or delivered_part
+                time.sleep(random.uniform(1.0, 2.0))
+            visible = parts[-1]
+        if self.epoch != epoch:
+            return
         payload = [b.text(visible), b.buttons(buttons), b.text(led.hud())]
         ok, sent = self._send(room, payload, inbound)
-        if not ok:
-            # Never delivered: forget the turn, or the pity timer would
-            # count a leak nobody ever saw as "on screen".
+        if not ok and not delivered_part:
+            # Nothing reached the screen: forget the turn — and tell the
+            # Director, so a lost echo/leak can fire again later.
             with self.lock:
                 led.turns.pop(rec.id, None)
                 if hist_entry in self.history[room]:
                     self.history[room].remove(hist_entry)
+            if self.epoch == epoch:
+                self.director.on_send_failed(beat, leak_facts)
+            return
+        if not ok:
+            # The leading texts landed, the final one didn't: the words are
+            # on the player's screen, so the receipt must stand ('flag' by
+            # text still scores it). Only the button watch is lost.
+            print(f"!! final part failed ({room}/{beat}); turn {rec.id} kept")
             return
         if sent:
             rec.message_id = sent.get("id") or (sent.get("message") or {}).get("id")
@@ -181,13 +212,15 @@ class Game:
             print(f"!! send failed ({room}): {e}")
         return False, None
 
-    def send_text(self, room, text):
+    def send_text(self, room, text) -> bool:
         try:
             conv = self.conversations.get(room)
             if conv:
                 self.client.send_message(conv, text=text)
+                return True
         except Exception as e:
             print(f"!! send failed ({room}): {e}")
+        return False
 
     # ------------------------------------------------------------ blocking
     def _watch_for_block(self, room, message_id):
@@ -400,10 +433,20 @@ class Game:
         # line and the run stays whole. (After an ending anyone may reset.)
         key = self._sender_key(message)
         with self.lock:
-            owner = self.owners.setdefault(room, key)
-            busy = key != owner and not self.ledger.ending
+            owner = self.owners.get(room)
+            ending = self.ledger.ending
+            run_live = any(self.ledger.opened.values()) and not ending
+            busy = owner is not None and key != owner and not ending
+            # An unopened room is still the run's room. Email is gated the
+            # moment we know the player's address — the game email is in
+            # the README, and a stranger walking in through it mid-run
+            # would be minted straight into the owner's Mind.
+            if (not busy and owner is None and run_live and room == "email"
+                    and self.player_email
+                    and key != self.player_email.lower()):
+                busy = True
         if busy:
-            print(f"<- [{room}] busy: {key!r} knocked during {owner!r}'s run")
+            print(f"<- [{room}] busy: {key!r} knocked during the owner's run")
             try:
                 message.reply(text=deck.BUSY)
             except Exception:
@@ -414,6 +457,16 @@ class Game:
         print(f"<- [{room}] {text!r}")
 
         if text.lower() in ("reset", "/reset"):
+            # Mid-run, only someone already in the run may pull the plug —
+            # a stranger's 'reset' to an untouched room must not kill a
+            # live game.
+            with self.lock:
+                allowed = (self.ledger.ending
+                           or not any(self.ledger.opened.values())
+                           or self.owners.get(room) == key)
+            if not allowed:
+                message.reply(text=deck.BUSY)
+                return
             self.reset()
             message.reply(text=deck.RESET_OK)
             return
@@ -435,6 +488,11 @@ class Game:
                 self._handle_flag(room, latest.id, inbound=message)
             return
 
+        # Only now does the sender own the door: commands, ended-run
+        # bounces and dead-end flags above never latch a room shut on
+        # the real player.
+        with self.lock:
+            self.owners.setdefault(room, key)
         self._scan_sender(room, message)
         self._scan_for_email(room, text)
         self.director.note_phrase(room, text)
@@ -464,15 +522,29 @@ class Game:
         value = interaction.value or ""
         if room is None:
             return
-        # The gateway rejects reply() on interactions ("Can only reply to an
-        # inbound message") — answer through the conversation instead.
-        if interaction.conversation_id:
-            self.conversations[room] = interaction.conversation_id
+        # Buttons outlive runs. A tap only counts if it comes from the
+        # room's current conversation — anything else is a stale button
+        # from a previous run or a foreign thread, and acting on it would
+        # let a ghost reset, plant into, or flag the live game.
+        conv = interaction.conversation_id
+        with self.lock:
+            cur = self.conversations.get(room)
+        if cur is None or (conv and conv != cur):
+            print(f"<- [{room}] stale tap {value!r} ignored")
+            return
         self.director.note_player_action()
         if value == "reset":  # the [run it back] button on the case file
             print(f"<- [{room}] tap {value!r}")
+            if not self.ledger.ending:
+                return  # [run it back] only lives on a case file
             self.reset()
-            self.send_text(room, deck.RESET_OK)
+            # reset() just cleared the conversation map — answer through
+            # the thread the tap came from. The gateway rejects reply()
+            # on interactions, so send directly.
+            try:
+                self.client.send_message(conv or cur, text=deck.RESET_OK)
+            except Exception as e:
+                print(f"!! reset ack failed ({room}): {e}")
             return
         if self.ledger.ending:
             self.send_text(room, deck.AFTER_END)
@@ -494,11 +566,16 @@ class Game:
             result = self.ledger.flag(turn_id)
 
         def answer(text):
+            # Must never raise: on the run-ending flag, an exception here
+            # would swallow finish() — no case file, and the seat bricks.
             body = f"{text}\n{self.ledger.hud()}"
             if inbound is not None:
-                inbound.reply(text=body)
-            else:
-                self.send_text(room, body)
+                try:
+                    inbound.reply(text=body)
+                    return
+                except Exception as e:
+                    print(f"!! flag reply failed ({room}): {e}")
+            self.send_text(room, body)
 
         verdict = result["verdict"]
         if verdict == "spent":
@@ -657,7 +734,10 @@ class Game:
             led = self.ledger
             now = time.time()
             if led.ending:
-                stale = self.ended_at and now - self.ended_at > ENDED_RESET
+                # ended_at can be None if finish() ever died mid-flight —
+                # fall back to the last action so the seat can't brick.
+                end_ts = self.ended_at or self.director.last_player_action
+                stale = now - end_ts > ENDED_RESET
             else:
                 stale = (any(led.opened.values())
                          and now - self.director.last_player_action > DORMANT_RESET)
