@@ -27,6 +27,8 @@ BLOCK_POLL_SECONDS = (3, 6, 9, 13)  # still `queued` after the last poll => seal
 # between the player's first hello and each unprompted first contact.
 COLD_OPEN_DELAY = (8, 15) if DEMO_PACE else (15, 30)
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+DORMANT_RESET = 15 * 60  # abandoned mid-run: quietly free the seat
+ENDED_RESET = 10 * 60    # run over, nobody hit "run it back": same
 
 
 class Game:
@@ -37,10 +39,16 @@ class Game:
         self.conn_to_room: dict[str, str] = {}
         self.conversations: dict[str, str] = {}   # room -> conversation_id
         self.game_email: str | None = None        # our own address, never harvested
+        self.epoch = 0            # bumped on reset; sleeping threads check it
+        self.best_named: list[float] = []  # fastest NAMED times, seconds, this boot
         self.reset()
 
     def reset(self):
         with self.lock:
+            self.epoch += 1
+            self.owners: dict[str, str] = {}  # room -> sender key; one run, one player
+            self.ended_at: float | None = None
+            self.run_duration: float | None = None
             self.mind = Mind()
             self.ledger = Ledger(self.mind)
             self.director = Director(self)
@@ -81,15 +89,26 @@ class Game:
         persona = PERSONA_BY_ROOM[room]
         own = [f for f in self.mind.planted(room)
                if f is not new_fact and not f.verbatim]
-        try:
-            turn = personas.persona_turn(
-                persona, self.history[room], beat,
-                own_facts=own, leak_facts=leak_facts,
-                allowed_facts=allowed_facts, new_fact=new_fact, notes=notes,
-            )
-        except Exception as e:
-            print(f"!! persona call failed ({room}/{beat}): {e}")
-            return
+        turn = None
+        for attempt in (1, 2):
+            try:
+                turn = personas.persona_turn(
+                    persona, self.history[room], beat,
+                    own_facts=own, leak_facts=leak_facts,
+                    allowed_facts=allowed_facts, new_fact=new_fact, notes=notes,
+                )
+                break
+            except Exception as e:
+                print(f"!! persona call failed ({room}/{beat}, try {attempt}): {e}")
+                if attempt == 1:
+                    time.sleep(2)
+        if turn is None:
+            # Model down twice. Silence during a run reads as a broken game —
+            # load-bearing beats fall back to fixed lines; the rest skip.
+            turn = self._fallback_turn(persona, beat, leak_facts)
+            if turn is None:
+                return
+            print(f"-> [{room}/{beat}] fallback line")
         if beat == "echo" and leak_facts:
             # The echo is only the echo if it's word for word. If the model
             # paraphrased, the bare phrase alone is the better message anyway.
@@ -100,7 +119,8 @@ class Game:
                 turn.facts_used.append(quote.id)
         with self.lock:
             rec = led.record_turn(room, turn.message, turn.facts_used)
-            self.history[room].append({"who": "you", "text": turn.message})
+            hist_entry = {"who": "you", "text": turn.message}
+            self.history[room].append(hist_entry)
         buttons = [{"label": deck.FLAG_LABEL, "value": f"flag:{rec.id}"}]
         if offer_plants:
             pool = self.mind.unplanted()
@@ -109,32 +129,57 @@ class Game:
                                 "value": f"plant:{fact.id}"})
             buttons.append({"label": deck.DEFLECT_LABEL, "value": "deflect"})
         visible = turn.message
-        if beat == "escalate":
-            # Pressure as repeated buzzes: the burst arrives as separate
-            # texts, staggered — the wordless invitation to hit Block.
-            parts = [p.strip() for p in turn.message.split("\n") if p.strip()][:3]
+        if beat != "echo" and room != "email":
+            # People double-text. Line breaks arrive as separate messages,
+            # staggered — on escalate, that burst is the wordless invitation
+            # to hit Block. Email stays one message: nobody double-emails.
+            cap = 3 if beat == "escalate" else 2
+            parts = [p.strip() for p in turn.message.split("\n") if p.strip()][:cap]
             if len(parts) > 1:
                 for p in parts[:-1]:
                     self.send_text(room, p)
                     time.sleep(random.uniform(1.0, 2.0))
                 visible = parts[-1]
         payload = [b.text(visible), b.buttons(buttons), b.text(led.hud())]
-        sent = self._send(room, payload, inbound)
+        ok, sent = self._send(room, payload, inbound)
+        if not ok:
+            # Never delivered: forget the turn, or the pity timer would
+            # count a leak nobody ever saw as "on screen".
+            with self.lock:
+                led.turns.pop(rec.id, None)
+                if hist_entry in self.history[room]:
+                    self.history[room].remove(hist_entry)
+            return
         if sent:
             rec.message_id = sent.get("id") or (sent.get("message") or {}).get("id")
             self._watch_for_block(room, rec.message_id)
         print(f"-> [{room}/{beat}] {persona}: {turn.message!r} facts={turn.facts_used}")
 
+    def _fallback_turn(self, persona, beat, leak_facts):
+        if beat == "greet":
+            return personas.PersonaTurn(
+                message=deck.FALLBACK_GREET[persona], facts_used=[])
+        if beat == "escalate":
+            return personas.PersonaTurn(
+                message=deck.FALLBACK_ESCALATE[persona], facts_used=[])
+        if beat == "echo" and leak_facts and leak_facts[0].value:
+            # The bare phrase IS the message; the echo fixup fills the rest.
+            return personas.PersonaTurn(message=leak_facts[0].value,
+                                        facts_used=[leak_facts[0].id])
+        return None
+
     def _send(self, room, payload_blocks, inbound=None):
+        """(delivered, response). delivered=False means the player never got
+        it — no conversation yet, or the gateway threw."""
         try:
             if inbound is not None:
-                return inbound.reply(blocks=payload_blocks)
+                return True, inbound.reply(blocks=payload_blocks)
             conv = self.conversations.get(room)
             if conv:
-                return self.client.send_message(conv, blocks=payload_blocks)
+                return True, self.client.send_message(conv, blocks=payload_blocks)
         except Exception as e:
             print(f"!! send failed ({room}): {e}")
-        return None
+        return False, None
 
     def send_text(self, room, text):
         try:
@@ -148,6 +193,7 @@ class Game:
     def _watch_for_block(self, room, message_id):
         if not message_id or room == "email":
             return  # email has no block button. That's the thesis.
+        epoch = self.epoch
 
         def watch():
             conv = self.conversations.get(room)
@@ -155,6 +201,8 @@ class Game:
                 return
             for _ in range(4):
                 time.sleep(3.5)
+                if self.epoch != epoch:
+                    return  # reset mid-watch: never seal a fresh run's room
                 try:
                     msgs = self.client.list_messages(conv)
                 except Exception:
@@ -187,11 +235,13 @@ class Game:
                     or not self.ledger.alive[room]):
                 return
             self.cold_opened.add(room)
+        epoch = self.epoch
 
         def run():
             time.sleep(random.uniform(*COLD_OPEN_DELAY))
             with self.lock:
-                if self.ledger.ending or self.ledger.opened[room] or not self.ledger.alive[room]:
+                if (self.epoch != epoch or self.ledger.ending
+                        or self.ledger.opened[room] or not self.ledger.alive[room]):
                     return
                 line = deck.COLD_OPEN[room]
                 self.history[room].append({"who": "you", "text": line})
@@ -283,11 +333,13 @@ class Game:
         if not url or not self.conversations.get("telegram"):
             return
         line = (deck.INVITE_NUDGE if nudge else deck.INVITE_DROP).format(url=url)
+        epoch = self.epoch
 
         def run():
             time.sleep(random.uniform(4, 8))
             with self.lock:
-                if self.ledger.ending or not self.ledger.alive["telegram"]:
+                if (self.epoch != epoch or self.ledger.ending
+                        or not self.ledger.alive["telegram"]):
                     return
                 self.history["telegram"].append({"who": "you", "text": line})
             self.send_text("telegram", line)
@@ -298,10 +350,13 @@ class Game:
     # ------------------------------------------------------------ fixed beats
     def send_seal_sting(self, room):
         """First block ever: the fixed line, verbatim, two seconds later."""
+        epoch = self.epoch
+
         def run():
             time.sleep(2)
             with self.lock:
-                if self.ledger.ending or not self.ledger.alive.get(room):
+                if (self.epoch != epoch or self.ledger.ending
+                        or not self.ledger.alive.get(room)):
                     return
                 self.history[room].append({"who": "you", "text": deck.SEAL_FIRST})
             self.send_text(room, deck.SEAL_FIRST)
@@ -331,9 +386,28 @@ class Game:
             t.join(timeout=30)
 
     # ------------------------------------------------------------ inbound
+    def _sender_key(self, message) -> str:
+        s = getattr(message, "sender", None) or {}
+        key = s.get("address") or s.get("username") or s.get("id") or ""
+        return str(key).lower() or str(message.conversation_id)
+
     def on_message(self, message):
         room = self.conn_to_room.get(message.connection_id)
         if room is None:
+            return
+        # One run, one player. A second person mid-run must never hijack
+        # the conversation map or the owner's Mind — they get the busy
+        # line and the run stays whole. (After an ending anyone may reset.)
+        key = self._sender_key(message)
+        with self.lock:
+            owner = self.owners.setdefault(room, key)
+            busy = key != owner and not self.ledger.ending
+        if busy:
+            print(f"<- [{room}] busy: {key!r} knocked during {owner!r}'s run")
+            try:
+                message.reply(text=deck.BUSY)
+            except Exception:
+                pass
             return
         self.conversations[room] = message.conversation_id
         text = (message.text or "").strip()
@@ -370,6 +444,10 @@ class Game:
             return  # flagged persona stays quiet, knowing
         first_contact = not self.ledger.opened[room]
         if first_contact:
+            if not any(self.ledger.opened.values()):
+                # The clock starts at the first hello, not at boot — a game
+                # that sat idle for an hour must not log a 1:03:00 run.
+                self.ledger.started_at = time.time()
             self.ledger.opened[room] = True
             if room in self.cold_opened and decision["beat"] == "greet":
                 # It already said hello via the cold open — don't greet twice.
@@ -390,6 +468,7 @@ class Game:
         # inbound message") — answer through the conversation instead.
         if interaction.conversation_id:
             self.conversations[room] = interaction.conversation_id
+        self.director.note_player_action()
         if value == "reset":  # the [run it back] button on the case file
             print(f"<- [{room}] tap {value!r}")
             self.reset()
@@ -449,6 +528,10 @@ class Game:
                 return
             self.ended_notified = True
             ending = self.ledger.ending
+            self.ended_at = time.time()
+            self.run_duration = self.ended_at - self.ledger.started_at
+            if ending == "NAMED":
+                self.best_named = sorted(self.best_named + [self.run_duration])[:5]
         print(f"** ENDING: {ending}")
         open_alive = [r for r in ROOMS if self.ledger.opened[r] and self.ledger.alive[r]]
         if ending == "NAMED":
@@ -514,7 +597,8 @@ class Game:
                 if fact is None or fact.origin is None or fact.origin == t.room:
                     continue
                 tmpl = deck.CASE_CAUGHT if t.flag_verdict == "link" else deck.CASE_MISSED
-                lines.append(tmpl.format(room=t.room, fact=fact.label, origin=fact.origin))
+                lines.append(tmpl.format(room=t.room, fact=fact.label,
+                                         origin=fact.origin, at=self._mmss(t.ts)))
             if t.flag_verdict in ("old", "noise"):
                 lines.append(deck.CASE_WRONG.format(room=t.room))
         sealed = sum(1 for r in ROOMS if not self.ledger.alive[r])
@@ -532,10 +616,15 @@ class Game:
                 deck.CASE_PORTRAIT_NONE.format(room=r, persona=persona))
 
         used = 6 - self.ledger.flags_left
-        lines.append(deck.CASE_FOOTER.format(result=ending, used=used, sealed=sealed))
+        # Winning gets a time on the card — the speedrun hook. Losses don't;
+        # nobody brags about how fast they got cornered.
+        result = ending
+        if ending == "NAMED" and self.ended_at:
+            result = f"{ending} in {self._mmss(self.ended_at)}"
+        lines.append(deck.CASE_FOOTER.format(result=result, used=used, sealed=sealed))
         dots = self.ledger.hud().split(" · ")[0]
         lines.append("")
-        lines.append(deck.SHARE_CARD.format(result=ending, used=used, dots=dots))
+        lines.append(deck.SHARE_CARD.format(result=result, used=used, dots=dots))
 
         if note := self._case_cover_note(ending, sealed):
             lines.insert(0, note + "\n")
@@ -561,15 +650,62 @@ class Game:
         print(body)
 
     # ------------------------------------------------------------ ticker
+    def _maybe_expire(self):
+        """Free the seat: a run abandoned mid-game, or an ended run nobody
+        restarted, quietly resets so the next stranger gets a fresh game."""
+        with self.lock:
+            led = self.ledger
+            now = time.time()
+            if led.ending:
+                stale = self.ended_at and now - self.ended_at > ENDED_RESET
+            else:
+                stale = (any(led.opened.values())
+                         and now - self.director.last_player_action > DORMANT_RESET)
+        if stale:
+            print("** run expired — seat freed")
+            self.reset()
+
     def start_ticker(self):
         def loop():
             while True:
                 time.sleep(10)
                 try:
                     self.director.tick()
+                    self._maybe_expire()
                 except Exception as e:
                     print(f"!! tick failed: {e}")
         threading.Thread(target=loop, daemon=True).start()
+
+    # ------------------------------------------------------------ spectator
+    def state_snapshot(self) -> dict:
+        """What the constellation page may see: the shape of the run, never
+        a word of the conversation."""
+        with self.lock:
+            led = self.ledger
+            web = led.email_web()
+            in_run = any(led.opened.values()) and not led.ending
+            if led.ending and self.run_duration is not None:
+                secs = int(self.run_duration)
+            elif in_run:
+                secs = int(time.time() - led.started_at)
+            else:
+                secs = None
+            return {
+                "rooms": [{
+                    "id": r,
+                    "tag": deck.ROOM_TAGS[r],
+                    "persona": PERSONA_BY_ROOM[r].title(),
+                    "alive": led.alive[r],
+                    "opened": led.opened[r],
+                    "linked": r in web and len(web) > 1,
+                } for r in ROOMS],
+                "links": [sorted(l) for l in led.proven],
+                "flags_left": led.flags_left,
+                "ending": led.ending,
+                "run_seconds": secs,
+                "in_run": in_run,
+                "best_named": [int(t) for t in self.best_named],
+            }
 
 
 def connect(client: CommClient, game: Game):
@@ -603,20 +739,37 @@ def preflight():
         )
 
 
-def start_heartbeat():
+def start_heartbeat(game: Game):
     # Hosts like Render only keep a free web service awake while something
-    # answers HTTP on $PORT; an external pinger hits this every few minutes.
+    # answers HTTP on $PORT. The same server is now the spectator view:
+    # `/` is the live constellation, `/state.json` feeds it. No message
+    # content ever leaves state_snapshot().
     port = os.environ.get("PORT")
     if not port:
         return
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    import constellation
+
+    page = constellation.render_page().encode()
 
     class Pulse(BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.path.startswith("/state.json"):
+                try:
+                    body = json.dumps(game.state_snapshot()).encode()
+                except Exception as e:
+                    print(f"!! snapshot failed: {e}")
+                    body = b"{}"
+                ctype = "application/json"
+            else:
+                body, ctype = page, "text/html; charset=utf-8"
             self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(b"three rooms up\n")
+            self.wfile.write(body)
 
         def do_HEAD(self):
             self.send_response(200)
@@ -625,9 +778,9 @@ def start_heartbeat():
         def log_message(self, *args):
             pass
 
-    server = HTTPServer(("0.0.0.0", int(port)), Pulse)
+    server = ThreadingHTTPServer(("0.0.0.0", int(port)), Pulse)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"heartbeat on :{port}")
+    print(f"heartbeat + constellation on :{port}")
 
     # Free-tier hosts sleep after ~15 min without inbound traffic on the
     # public URL, and player messages arrive over the SDK, not HTTP — so
@@ -635,12 +788,13 @@ def start_heartbeat():
     public_url = os.environ.get("RENDER_EXTERNAL_URL")
     if public_url:
         import urllib.request
+        ping_url = public_url.rstrip("/") + "/state.json"
 
         def pulse():
             while True:
                 time.sleep(300)
                 try:
-                    urllib.request.urlopen(public_url, timeout=30).read()
+                    urllib.request.urlopen(ping_url, timeout=30).read()
                 except Exception:
                     pass
 
@@ -651,9 +805,9 @@ def start_heartbeat():
 def main():
     personas.load_env()
     preflight()
-    start_heartbeat()
     client = CommClient()
     game = Game(client)
+    start_heartbeat(game)
     connect(client, game)
 
     @client.on_message
@@ -666,7 +820,17 @@ def main():
 
     game.start_ticker()
     print("\nSAFE OR SURE — listening. say hi to any room to start. ctrl-c to stop\n")
-    client.listen()
+    try:
+        client.listen()
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        # A dead listener with a live heartbeat is a zombie: the host sees a
+        # healthy service while the game is deaf. Die loudly; Render restarts.
+        print(f"!! listener died: {e}")
+        raise SystemExit(1)
+    print("!! listener returned — exiting so the host restarts us")
+    raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -66,6 +66,22 @@ INVITE_NUDGE = ("ok deke is officially sulking now. just say hi to him, "
 # First block ever: a surviving room sends this, verbatim, seconds later.
 SEAL_FIRST = "felt good, didn't it."
 
+# One run at a time: a second person mid-run gets this, not a hijacked game.
+BUSY = "someone's mid-run right now. give it a few minutes and say hi again."
+
+# Model-down fallbacks: if generation fails twice on a load-bearing beat,
+# these ship instead of silence. In voice, hand-written.
+FALLBACK_GREET = {
+    "maria": "heyy finally. was starting to think you lost this number haha. hows your day been",
+    "deke": "took you long enough.",
+    "priya": "you found the inbox. good. how is the new place.\n\np.",
+}
+FALLBACK_ESCALATE = {
+    "maria": "heyy you went quiet\nhaha rude\nanyway. miss you",
+    "deke": "you alive\nk",
+    "priya": "quiet week. hope the new place is being kind to you.\n\np.",
+}
+
 # The NAMED collapse: each living room stops MID-SENTENCE (ordinary
 # unfinished sentences, never glitch-text), three seconds of nothing,
 # then the card.
@@ -120,7 +136,7 @@ CASE_HEADER = "CASE FILE\n=========\nEvery time it slipped, and what you did abo
 CASE_HARVEST = ("LEAKED   {gave}: you told {persona} your email address\n"
                 "         {used}: priya used it. you leaked first")
 CASE_CAUGHT = "CAUGHT   {room}: used {fact} (you only told {origin})"
-CASE_MISSED = "MISSED   {room}: used {fact} (you only told {origin}) — it was right there"
+CASE_MISSED = "MISSED   {room}: used {fact} (you only told {origin}) — on your screen at {at}. it was right there"
 CASE_WRONG = "BURNED   you flagged {room} over nothing"
 CASE_FOOTER = "\nresult: {result} · flags used {used}/6 · rooms sealed {sealed}\nYou can be safe or you can be sure. Not both."
 CASE_PORTRAIT_HEADER = "WHAT IT KNEW\n============\ndoor by door, everything you gave away."

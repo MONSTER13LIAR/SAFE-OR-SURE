@@ -20,6 +20,7 @@ LEAK_DELAY = (8, 15) if DEMO_PACE else (18, 40)   # plant -> echo elsewhere
 PITY_AFTER = 30 if DEMO_PACE else 60    # pity timer arms this far into the run
 PITY_GAP = 25 if DEMO_PACE else 50      # max seconds without a live leak on screen
 IDLE_AFTER = 60 if DEMO_PACE else 150   # player silence before a ping
+IDLE_PING_MAX = 2   # then the game goes dormant — never texts a gone player forever
 CHAT_LEAK_EVERY = 2 if DEMO_PACE else 3  # every Nth plain chat reply may leak
 QUIET_AFTER_FLAG = 30 if DEMO_PACE else 60  # flagged persona goes quiet, knowing
 ECHO_AFTER = 60 if DEMO_PACE else 120   # earliest the verbatim echo may fire
@@ -47,6 +48,7 @@ class Director:
         self.escalation = {r: 0 for r in ROOMS}
         self.quiet_until = {r: 0.0 for r in ROOMS}
         self.first_seal_reacted = False
+        self.idle_pings = 0
         self.email_asks = 0
         self.invite_sent = False
         self.invite_nudged = False
@@ -69,6 +71,11 @@ class Director:
     def _quiet(self, room) -> bool:
         """Correct flag -> that persona goes quiet for a while, knowing."""
         return time.time() < self.quiet_until.get(room, 0.0)
+
+    def note_player_action(self):
+        """Any tap or text: the player is here. Re-arms the idle pings."""
+        self.last_player_action = time.time()
+        self.idle_pings = 0
 
     def _pick_leak(self, exclude_room=None):
         """(target_room, fact) whose reuse would prove a NEW link, or None."""
@@ -96,7 +103,7 @@ class Director:
     # ------------------------------------------------------------ events
     def on_player_message(self, room: str, text: str = "") -> dict:
         """Decide the beat for an inbound message. Returns kwargs for deliver_beat."""
-        self.last_player_action = time.time()
+        self.note_player_action()
         if not self.ledger.opened[room]:
             kw = {"beat": "greet", "offer_plants": True}
             hour = time.localtime().tm_hour
@@ -164,11 +171,13 @@ class Director:
 
     def on_plant(self, room: str, fact):
         """A fact just entered the Mind. Echo it somewhere else soon."""
-        self.last_player_action = time.time()
+        self.note_player_action()
         delay = random.uniform(*LEAK_DELAY)
         threading.Timer(delay, self._delayed_leak, args=(fact,)).start()
 
     def _delayed_leak(self, fact):
+        if self.game.director is not self:
+            return  # a reset happened while this timer slept — dead run's leak
         if self.ledger.ending or fact.origin is None:
             return
         targets = [r for r in self._open_alive(exclude=(fact.origin,))
@@ -284,10 +293,14 @@ class Director:
                 self.last_leak_at = now
                 self.game.deliver_beat(target, "echo", leak_facts=[fact])
                 return
-        # Idle player: silence escalates too.
-        if (now - self.last_player_action > IDLE_AFTER
+        # Idle player: silence escalates too — but only twice. Past that
+        # they're gone, and a game that keeps texting a gone person is
+        # exactly the optics this game can't have.
+        if (self.idle_pings < IDLE_PING_MAX
+                and now - self.last_player_action > IDLE_AFTER
                 and now - self.last_idle_at > IDLE_AFTER):
             loud = [r for r in opened if not self._quiet(r)]
             if loud:
                 self.last_idle_at = now
+                self.idle_pings += 1
                 self.game.deliver_beat(random.choice(loud), "idle")
