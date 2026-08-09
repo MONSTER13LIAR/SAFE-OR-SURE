@@ -29,9 +29,10 @@ it runs on a free open model. (If nobody answers, the instance is between
 sessions — it's live through the judging window.)
 
 **[safe-or-sure.onrender.com](https://safe-or-sure.onrender.com)** has all
-three doors on it, and draws the run as it happens — rooms as dots, every
-link you prove in amber, no message content. It's the spectator view and the
-front door at once; if someone else is mid-run, it tells you before you tap.
+three doors on it, and draws every run happening right now — rooms as dots,
+each link someone proves in amber, no message content. It's the spectator
+view and the front door at once. Play at the same time as other people:
+each run is its own game, and yours is the one your phone is holding.
 
 Impatient, or skipped Maria's questions? Open the doors yourself:
 
@@ -128,16 +129,27 @@ Then fill `.env`:
 4. `FEATHERLESS_API_KEY` — any [featherless.ai](https://featherless.ai) key.
    (Or set `ANTHROPIC_API_KEY` instead and the personas run on claude-opus-5.)
 
-Optional but worth it — **the cold open**: set `PLAYER_EMAIL` and
-`PLAYER_DISCORD_ID` to your own handles (Discord: Settings → Advanced →
-Developer Mode, then right-click your name → Copy User ID). Say hi to Maria
-and within half a minute the other two strangers message you first,
-unprompted. Strangers playing your instance don't need any of that: when
-Maria asks for their email in chat and they answer, Priya cold-opens to
-that address instead — the game only ever initiates to a handle the player
-registered or handed over themselves. Set `DISCORD_INVITE_URL` to a
-permanent invite for your bot's server and Maria hands out Deke's door in
-conversation too.
+Optional — **testing the cold open on your own phone**: set `SOLO_TEST=1`
+plus `PLAYER_EMAIL` and `PLAYER_DISCORD_ID` to your own handles (Discord:
+Settings → Advanced → Developer Mode, then right-click your name → Copy
+User ID). Say hi to Maria and within half a minute the other two strangers
+message you first, unprompted. **Leave `SOLO_TEST` off on anything public**
+— those are your handles, and the first stranger's run would cold-open into
+your inbox. Without it nothing is lost: when a room asks for their email in
+chat and they answer, Priya cold-opens to that address instead. The game
+only ever initiates to a handle the player registered or handed over
+themselves.
+
+Set `DISCORD_INVITE_URL` to a permanent invite for your bot's server and the
+rooms hand out each other's doors in conversation.
+
+**Many people can play one instance at once.** Each run is a separate
+Session with its own Mind, Ledger and Director; nothing crosses between
+them. A run belongs to whoever is in it, and a room joins that run only on
+evidence the player handed over themselves — the address they typed, the
+discord name they gave. `MAX_SESSIONS` (default 12) caps how many runs are
+live at once, and `MODEL_SLOTS` (default 4) caps how many persona calls are
+in flight, so a crowd queues instead of hitting the model's rate limit.
 
 `RUN_PACE=demo` tightens every timer for a ~3–4 minute run (the default pace
 is a 5–6 minute game).
@@ -153,4 +165,6 @@ discovered from your bot token automatically; `TELEGRAM_BOT_URL` overrides it.
 It prints the three addresses. Message any of them from your phone.
 
 `playtest.py` runs the opening beats offline (no channels needed) if you
-just want to watch the personas talk.
+just want to watch the personas talk. `smoke.py` drives the handler with
+fake channels and several players at once — it needs no keys and asserts
+the thing that matters most: no run can ever see another run's game.

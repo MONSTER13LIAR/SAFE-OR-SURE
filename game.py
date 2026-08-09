@@ -26,34 +26,62 @@ BLOCK_POLL_SECONDS = (3, 6, 9, 13)  # still `queued` after the last poll => seal
 # Cold open: say hi to one stranger and the other two find you. Seconds
 # between the player's first hello and each unprompted first contact.
 COLD_OPEN_DELAY = (8, 15) if DEMO_PACE else (15, 30)
+DOOR_DROP_DELAY = (4, 8)  # a handed-over door lands like an afterthought
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# Words that show up in "my discord is x" but are never the handle itself.
+HANDLE_STOPWORDS = {
+    "my", "im", "its", "it", "is", "the", "a", "on", "at", "same", "as",
+    "you", "your", "me", "mine", "discord", "username", "user", "handle",
+    "name", "tag", "id", "yes", "no", "ok", "okay", "sure", "haha", "lol",
+    "add", "there", "here", "just", "and", "but", "so", "then", "that",
+}
 # Abandoned mid-run / ended-and-ignored: quietly free the seat. Demo pace
 # shrinks it — a judge's drive-by "hi" must not hold the door for 15 min.
 DORMANT_RESET = 3 * 60 if DEMO_PACE else 15 * 60
 ENDED_RESET = 2 * 60 if DEMO_PACE else 10 * 60
+# How many people may be inside the game at once, and how many persona
+# calls may be in flight across all of them (open-model endpoints answer a
+# few at a time; past that everyone waits, so we queue instead).
+MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "12"))
+MODEL_SLOTS = int(os.getenv("MODEL_SLOTS", "4"))
 
 
-class Game:
-    def __init__(self, client: CommClient):
-        self.client = client
+def norm_handle(v) -> str:
+    """One shape for anything a channel calls a person, so a handle typed
+    into a chat can be compared with the sender field of a later message."""
+    h = str(v or "").strip().lower().lstrip("@")
+    h = h.split("#")[0]          # discord discriminators
+    return " ".join(h.split())
+
+
+class Session:
+    """One player's run: their Mind, their Ledger, their Director, their
+    three conversations. Sessions never read each other's state — that
+    isolation is what lets a crowd play one instance at once."""
+
+    def __init__(self, hub, sid: str):
+        self.hub = hub
+        self.id = sid
         self.lock = threading.RLock()
         self.room_locks = {r: threading.Lock() for r in ROOMS}
-        self.conn_to_room: dict[str, str] = {}
         self.conversations: dict[str, str] = {}   # room -> conversation_id
-        self.game_email: str | None = None        # our own address, never harvested
-        self.telegram_url = os.getenv("TELEGRAM_BOT_URL") or None  # the front page's first door
-        self.epoch = 0            # bumped on reset; sleeping threads check it
-        self.best_named: list[float] = []  # fastest NAMED times, seconds, this boot
-        self.reset()
+        self.keys: dict[str, str] = {}            # room -> who the player is there
+        self.expect: dict[str, list[str]] = {}    # room -> handles they gave us
+        self.epoch = 0            # bumped on restart; sleeping threads check it
+        self.dead = False
+        self.last_seen = time.time()
+        # PLAYER_EMAIL / PLAYER_DISCORD_ID are the builder's own handles, so
+        # only the first run of the process may use them. Every stranger's
+        # run gets nothing but what they hand over themselves.
+        self.player_email, self.player_discord = hub.claim_builder_handles()
+        self.restart()
 
-    def reset(self):
+    def restart(self):
+        """Run it back: a new game for the same person. Their conversations
+        and the handles they gave us survive; every scrap of the finished
+        run does not."""
         with self.lock:
             self.epoch += 1
-            self.owners: dict[str, str] = {}  # room -> sender key; one run, one player
-            # The conversation map dies with the run: the next player's
-            # messages (and case file) must never route into the previous
-            # player's threads.
-            self.conversations = {}
             self.ended_at: float | None = None
             self.run_duration: float | None = None
             self.mind = Mind()
@@ -63,14 +91,23 @@ class Game:
             self.ended_notified = False
             self.cold_open_started = False
             self.cold_opened: set[str] = set()
-            # The player's email: from .env for the builder, or harvested
-            # in-game when they answer Maria's ask. Cold-open + case-file target.
-            self.player_email = os.getenv("PLAYER_EMAIL") or None
             self.harvest_room: str | None = None
             self.harvest_times: dict[str, float] = {}
 
+    # Shared plumbing lives on the hub; a session only ever reads it.
+    @property
+    def client(self):
+        return self.hub.client
+
+    @property
+    def game_email(self):
+        return self.hub.game_email
+
     def room_conn(self) -> dict[str, str]:
-        return {room: conn for conn, room in self.conn_to_room.items()}
+        return self.hub.room_conn()
+
+    def door_url(self, room) -> str | None:
+        return self.hub.doors().get(room)
 
     # ------------------------------------------------------------ delivery
     def deliver_beat(self, room, beat, **kw):
@@ -101,11 +138,14 @@ class Game:
         turn = None
         for attempt in (1, 2):
             try:
-                turn = personas.persona_turn(
-                    persona, self.history[room], beat,
-                    own_facts=own, leak_facts=leak_facts,
-                    allowed_facts=allowed_facts, new_fact=new_fact, notes=notes,
-                )
+                # One queue for every session's calls: a crowd must never
+                # turn into a rate-limit wall where nobody gets a reply.
+                with self.hub.model_slots:
+                    turn = personas.persona_turn(
+                        persona, self.history[room], beat,
+                        own_facts=own, leak_facts=leak_facts,
+                        allowed_facts=allowed_facts, new_fact=new_fact, notes=notes,
+                    )
                 break
             except Exception as e:
                 print(f"!! persona call failed ({room}/{beat}, try {attempt}): {e}")
@@ -279,16 +319,23 @@ class Game:
                     return
                 line = deck.COLD_OPEN[room]
                 self.history[room].append({"who": "you", "text": line})
-            conn = self.room_conn().get(room)
-            if not conn:
-                return
-            try:
-                self.client.initiate(conn, recipient, line)
-                if room == "email" and self.harvest_room:
-                    self.harvest_times["used"] = time.time()
-                print(f"-> [{room}/cold_open] {line!r}")
-            except Exception as e:
-                print(f"!! cold open failed ({room}): {e}")
+            # A restart keeps the player's threads, so on the second run
+            # this is a message into a live conversation, not a cold start.
+            if conv := self.conversations.get(room):
+                sent = self.send_text(room, line)
+            else:
+                conn = self.room_conn().get(room)
+                if not conn:
+                    return
+                try:
+                    self.client.initiate(conn, recipient, line)
+                    sent = True
+                except Exception as e:
+                    print(f"!! cold open failed ({room}): {e}")
+                    return
+            if sent and room == "email" and self.harvest_room:
+                self.harvest_times["used"] = time.time()
+            print(f"-> [{room}/cold_open] {line!r}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -300,8 +347,8 @@ class Game:
             if self.cold_open_started:
                 return
             self.cold_open_started = True
-        if entry_room != "discord" and os.getenv("PLAYER_DISCORD_ID"):
-            self.cold_open_room("discord", os.environ["PLAYER_DISCORD_ID"])
+        if entry_room != "discord" and self.player_discord:
+            self.cold_open_room("discord", self.player_discord)
         if entry_room != "email" and self.player_email:
             self.cold_open_room("email", self.player_email)
 
@@ -355,29 +402,55 @@ class Game:
                 self.player_email = addr
         if room != "email" and not self.ledger.opened["email"]:
             self.cold_open_room("email", addr)
-        self.director.maybe_drop_invite()
+        self.director.maybe_drop_doors(room)
 
-    def send_invite_drop(self, nudge=False):
-        """Maria's follow-up text with Deke's door. Fixed copy, delayed a
-        few seconds so it lands like an afterthought, not a system message.
-        The nudge is the second, firmer drop — for a player who proved a
-        link but still hasn't opened Deke's room, without which the run
-        can't be won."""
-        url = os.getenv("DISCORD_INVITE_URL")
-        if not url or not self.conversations.get("telegram"):
+    def _scan_for_handle(self, room, text):
+        """They answer the 'whats your discord' ask. Routing only — never
+        minted as a fact: Deke reading the name on his own DM is not
+        knowledge he could only have got somewhere else."""
+        if (room == "discord" or self.director.handle_asks == 0
+                or self.expect.get("discord") or self.ledger.opened["discord"]):
             return
-        line = (deck.INVITE_NUDGE if nudge else deck.INVITE_DROP).format(url=url)
+        if EMAIL_RE.search(text) or "http" in text.lower():
+            return
+        words = [w.strip(".,!?;:'\"") for w in text.split()]
+        cands = [w.lstrip("@") for w in words
+                 if 2 <= len(w.lstrip("@")) <= 32
+                 and re.fullmatch(r"[A-Za-z0-9._\-]+", w.lstrip("@"))
+                 and norm_handle(w) not in HANDLE_STOPWORDS]
+        if not cands:
+            return
+        # The longest token, plus the whole line if it's short enough to be
+        # a display name with spaces in it.
+        picks = [max(cands, key=len)]
+        line = " ".join(words)
+        if 2 <= len(line) <= 32 and len(words) <= 3:
+            picks.append(line)
+        self.expect["discord"] = [norm_handle(p) for p in picks if norm_handle(p)]
+        print(f"** [{self.id}] discord handle expected: {self.expect['discord']}")
+
+    def send_door_drop(self, from_room, target, nudge=False):
+        """One room hands over the door to a room the player hasn't opened.
+        Fixed copy, delayed a few seconds so it lands like an afterthought
+        and not a system message. The nudge is the second, firmer drop, for
+        a player whose run can't be won without that room."""
+        url = self.door_url(target)
+        table = deck.DOOR_NUDGE if nudge else deck.DOOR_DROP
+        line = table.get((from_room, target))
+        if not url or not line or not self.conversations.get(from_room):
+            return
+        line = line.format(url=url)
         epoch = self.epoch
 
         def run():
-            time.sleep(random.uniform(4, 8))
+            time.sleep(random.uniform(*DOOR_DROP_DELAY))
             with self.lock:
                 if (self.epoch != epoch or self.ledger.ending
-                        or not self.ledger.alive["telegram"]):
+                        or not self.ledger.alive[from_room]):
                     return
-                self.history["telegram"].append({"who": "you", "text": line})
-            self.send_text("telegram", line)
-            print(f"-> [telegram/invite_drop] {line!r}")
+                self.history[from_room].append({"who": "you", "text": line})
+            self.send_text(from_room, line)
+            print(f"-> [{from_room}/door_drop:{target}] {line!r}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -420,55 +493,15 @@ class Game:
             t.join(timeout=30)
 
     # ------------------------------------------------------------ inbound
-    def _sender_key(self, message) -> str:
-        s = getattr(message, "sender", None) or {}
-        key = s.get("address") or s.get("username") or s.get("id") or ""
-        return str(key).lower() or str(message.conversation_id)
-
-    def on_message(self, message):
-        room = self.conn_to_room.get(message.connection_id)
-        if room is None:
-            return
-        # One run, one player. A second person mid-run must never hijack
-        # the conversation map or the owner's Mind — they get the busy
-        # line and the run stays whole. (After an ending anyone may reset.)
-        key = self._sender_key(message)
-        with self.lock:
-            owner = self.owners.get(room)
-            ending = self.ledger.ending
-            run_live = any(self.ledger.opened.values()) and not ending
-            busy = owner is not None and key != owner and not ending
-            # An unopened room is still the run's room. Email is gated the
-            # moment we know the player's address — the game email is in
-            # the README, and a stranger walking in through it mid-run
-            # would be minted straight into the owner's Mind.
-            if (not busy and owner is None and run_live and room == "email"
-                    and self.player_email
-                    and key != self.player_email.lower()):
-                busy = True
-        if busy:
-            print(f"<- [{room}] busy: {key!r} knocked during the owner's run")
-            try:
-                message.reply(text=deck.BUSY)
-            except Exception:
-                pass
-            return
+    def handle_message(self, room, message):
+        """The player of THIS run said something in one of their rooms.
+        Routing already decided the run; nothing here can reach another."""
         self.conversations[room] = message.conversation_id
         text = (message.text or "").strip()
-        print(f"<- [{room}] {text!r}")
+        print(f"<- [{self.id}/{room}] {text!r}")
 
         if text.lower() in ("reset", "/reset"):
-            # Mid-run, only someone already in the run may pull the plug —
-            # a stranger's 'reset' to an untouched room must not kill a
-            # live game.
-            with self.lock:
-                allowed = (self.ledger.ending
-                           or not any(self.ledger.opened.values())
-                           or self.owners.get(room) == key)
-            if not allowed:
-                message.reply(text=deck.BUSY)
-                return
-            self.reset()
+            self.restart()
             message.reply(text=deck.RESET_OK)
             return
         if text.lower() == "/start":
@@ -476,7 +509,7 @@ class Game:
             # it reads as "again"; mid-run it's just a hello — either way
             # the literal slash-command must never reach a persona.
             if self.ledger.ending:
-                self.reset()
+                self.restart()
                 message.reply(text=deck.RESET_OK)
                 return
             text = "hi"
@@ -489,13 +522,9 @@ class Game:
                 self._handle_flag(room, latest.id, inbound=message)
             return
 
-        # Only now does the sender own the door: commands, ended-run
-        # bounces and dead-end flags above never latch a room shut on
-        # the real player.
-        with self.lock:
-            self.owners.setdefault(room, key)
         self._scan_sender(room, message)
         self._scan_for_email(room, text)
+        self._scan_for_handle(room, text)
         self.director.note_phrase(room, text)
         self.history[room].append({"who": "them", "text": text})
         decision = self.director.on_player_message(room, text)
@@ -518,11 +547,8 @@ class Game:
                           notes=decision.get("notes", ""),
                           inbound=message)
 
-    def on_interaction(self, interaction):
-        room = self.conn_to_room.get(interaction.connection_id)
+    def handle_interaction(self, room, interaction):
         value = interaction.value or ""
-        if room is None:
-            return
         # Buttons outlive runs. A tap only counts if it comes from the
         # room's current conversation — anything else is a stale button
         # from a previous run or a foreign thread, and acting on it would
@@ -535,13 +561,12 @@ class Game:
             return
         self.director.note_player_action()
         if value == "reset":  # the [run it back] button on the case file
-            print(f"<- [{room}] tap {value!r}")
+            print(f"<- [{self.id}/{room}] tap {value!r}")
             if not self.ledger.ending:
                 return  # [run it back] only lives on a case file
-            self.reset()
-            # reset() just cleared the conversation map — answer through
-            # the thread the tap came from. The gateway rejects reply()
-            # on interactions, so send directly.
+            self.restart()
+            # The gateway rejects reply() on interactions, so answer the
+            # thread the tap came from directly.
             try:
                 self.client.send_message(conv or cur, text=deck.RESET_OK)
             except Exception as e:
@@ -550,7 +575,7 @@ class Game:
         if self.ledger.ending:
             self.send_text(room, deck.AFTER_END)
             return
-        print(f"<- [{room}] tap {value!r}")
+        print(f"<- [{self.id}/{room}] tap {value!r}")
 
         if value == "deflect":
             self.send_text(room, deck.DEFLECTED)
@@ -608,9 +633,9 @@ class Game:
             ending = self.ledger.ending
             self.ended_at = time.time()
             self.run_duration = self.ended_at - self.ledger.started_at
-            if ending == "NAMED":
-                self.best_named = sorted(self.best_named + [self.run_duration])[:5]
-        print(f"** ENDING: {ending}")
+        if ending == "NAMED":
+            self.hub.note_named(self.run_duration)
+        print(f"** [{self.id}] ENDING: {ending}")
         open_alive = [r for r in ROOMS if self.ledger.opened[r] and self.ledger.alive[r]]
         if ending == "NAMED":
             # It stops mid-sentence — shown, not told: every living room cuts
@@ -643,12 +668,13 @@ class Game:
         when latency costs nothing. Gated: any failure or slop and the case
         file ships without it."""
         try:
-            turn = personas.persona_turn(
-                "priya", self.history["email"], "casefile",
-                notes=(f"the run ended: {ending}. they used "
-                       f"{6 - self.ledger.flags_left} of 6 flags and sealed "
-                       f"{sealed} rooms."),
-            )
+            with self.hub.model_slots:
+                turn = personas.persona_turn(
+                    "priya", self.history["email"], "casefile",
+                    notes=(f"the run ended: {ending}. they used "
+                           f"{6 - self.ledger.flags_left} of 6 flags and sealed "
+                           f"{sealed} rooms."),
+                )
             note = turn.message.strip()
             banned = ("certainly", "great question", "delve", "journey",
                       "fascinating", "watching", "always here")
@@ -728,48 +754,23 @@ class Game:
         print(body)
 
     # ------------------------------------------------------------ ticker
-    def _maybe_expire(self):
-        """Free the seat: a run abandoned mid-game, or an ended run nobody
-        restarted, quietly resets so the next stranger gets a fresh game."""
+    def expired(self) -> bool:
+        """Abandoned mid-game, or ended and ignored: the hub drops it, and
+        the person's next hello starts a clean run."""
         with self.lock:
             led = self.ledger
             now = time.time()
             if led.ending:
                 # ended_at can be None if finish() ever died mid-flight —
-                # fall back to the last action so the seat can't brick.
+                # fall back to the last action so a run can't get stuck.
                 end_ts = self.ended_at or self.director.last_player_action
-                stale = now - end_ts > ENDED_RESET
-            else:
-                stale = (any(led.opened.values())
-                         and now - self.director.last_player_action > DORMANT_RESET)
-        if stale:
-            print("** run expired — seat freed")
-            self.reset()
-
-    def start_ticker(self):
-        def loop():
-            while True:
-                time.sleep(10)
-                try:
-                    self.director.tick()
-                    self._maybe_expire()
-                except Exception as e:
-                    print(f"!! tick failed: {e}")
-        threading.Thread(target=loop, daemon=True).start()
+                return now - end_ts > ENDED_RESET
+            if any(led.opened.values()):
+                return now - self.director.last_player_action > DORMANT_RESET
+            return now - self.last_seen > DORMANT_RESET
 
     # ------------------------------------------------------------ spectator
-    def doors(self) -> dict[str, str]:
-        """The public entry points, for the front page: only the rooms a
-        visitor can actually open right now. A judge who lands on the URL
-        should be one tap from playing, never hunting through a README."""
-        offer = {
-            "telegram": self.telegram_url,
-            "discord": os.getenv("DISCORD_INVITE_URL"),
-            "email": self.game_email,
-        }
-        return {room: url for room, url in offer.items() if url}
-
-    def state_snapshot(self) -> dict:
+    def snapshot(self) -> dict:
         """What the constellation page may see: the shape of the run, never
         a word of the conversation."""
         with self.lock:
@@ -796,9 +797,207 @@ class Game:
                 "ending": led.ending,
                 "run_seconds": secs,
                 "in_run": in_run,
-                "best_named": [int(t) for t in self.best_named],
-                "doors": self.doors(),
+                "id": self.id,
+                "active_at": self.director.last_player_action,
             }
+
+
+class Game:
+    """The hub: one handler, one set of connections, and every live run.
+
+    It owns nothing about any particular game — it decides which run an
+    inbound message belongs to, and hands it over. Everything a run needs
+    to know about itself lives in its Session."""
+
+    def __init__(self, client: CommClient):
+        self.client = client
+        self.lock = threading.RLock()
+        self.conn_to_room: dict[str, str] = {}
+        self.game_email: str | None = None        # our own address, never harvested
+        self.telegram_url = os.getenv("TELEGRAM_BOT_URL") or None
+        self.best_named: list[float] = []   # fastest NAMED times this boot
+        self.sessions: list[Session] = []
+        self.by_conv: dict[str, Session] = {}          # conversation -> run
+        self.by_key: dict[tuple[str, str], Session] = {}  # (room, person) -> run
+        self.model_slots = threading.BoundedSemaphore(MODEL_SLOTS)
+        self._sid = 0
+        self._builder_handles_claimed = False
+
+    def room_conn(self) -> dict[str, str]:
+        return {room: conn for conn, room in self.conn_to_room.items()}
+
+    def claim_builder_handles(self) -> tuple[str | None, str | None]:
+        """PLAYER_EMAIL / PLAYER_DISCORD_ID are the host's own handles, for
+        testing the cold open on their own phone. On a public instance they
+        must never be used: the first stranger's run would cold-open into
+        the host's inbox and mail them the case file. So they need
+        SOLO_TEST, and even then only the first run of the process gets
+        them — everyone else hands over their own address in conversation."""
+        if not os.getenv("SOLO_TEST"):
+            return None, None
+        with self.lock:
+            if self._builder_handles_claimed:
+                return None, None
+            self._builder_handles_claimed = True
+            return (os.getenv("PLAYER_EMAIL") or None,
+                    os.getenv("PLAYER_DISCORD_ID") or None)
+
+    def note_named(self, seconds: float):
+        with self.lock:
+            self.best_named = sorted(self.best_named + [seconds])[:5]
+
+    def live(self) -> list[Session]:
+        return [s for s in self.sessions if not s.dead]
+
+    # ------------------------------------------------------------ routing
+    def _identity(self, message) -> tuple[str, set[str]]:
+        """Who sent this, in the only terms the channel gives us: a stable
+        key for the room, plus every name they might have typed at us."""
+        s = getattr(message, "sender", None) or {}
+        key = norm_handle(s.get("address") or s.get("username") or s.get("id")
+                          or message.conversation_id)
+        handles = {norm_handle(v) for v in (s.get("name"), s.get("username"),
+                                            s.get("address"), s.get("id")) if v}
+        return key, {h for h in handles if h}
+
+    def _claim(self, room, key, handles) -> Session | None:
+        """Is a run waiting for exactly this person in this room? Only ever
+        on evidence the player handed over themselves — the address they
+        typed, the handle they gave. Two possible runs means we don't know,
+        and a wrong guess would drop someone inside a stranger's game."""
+        found = []
+        for s in self.live():
+            if room in s.conversations:
+                continue  # that room already has its person
+            wants = list(s.expect.get(room) or [])
+            if room == "email" and s.player_email:
+                wants.append(norm_handle(s.player_email))
+            if room == "discord" and s.player_discord:
+                wants.append(norm_handle(s.player_discord))
+            for want in filter(None, wants):
+                if want == key or want in handles or any(
+                        len(h) >= 4 and (h in want or want in h) for h in handles):
+                    found.append(s)
+                    break
+        return found[0] if len(found) == 1 else None
+
+    def route(self, room, message) -> Session | None:
+        """The run this message belongs to, or None when the game is full."""
+        conv = message.conversation_id
+        key, handles = self._identity(message)
+        with self.lock:
+            s = self.by_conv.get(conv) or self.by_key.get((room, key))
+            if s is not None and s.dead:
+                s = None
+            if s is None:
+                s = self._claim(room, key, handles)
+                if s is not None:
+                    print(f"** [{s.id}] {room} joined by handle")
+            if s is None:
+                if len(self.live()) >= MAX_SESSIONS:
+                    return None
+                self._sid += 1
+                s = Session(self, f"r{self._sid}")
+                self.sessions.append(s)
+                print(f"** new run {s.id} — entered through {room} "
+                      f"({len(self.live())} live)")
+            s.conversations[room] = conv
+            s.keys[room] = key
+            self.by_conv[conv] = s
+            self.by_key[(room, key)] = s
+            s.last_seen = time.time()
+            return s
+
+    def on_message(self, message):
+        room = self.conn_to_room.get(message.connection_id)
+        if room is None:
+            return
+        session = self.route(room, message)
+        if session is None:
+            print(f"<- [{room}] full: {len(self.live())} runs in progress")
+            try:
+                message.reply(text=deck.BUSY)
+            except Exception:
+                pass
+            return
+        session.handle_message(room, message)
+
+    def on_interaction(self, interaction):
+        room = self.conn_to_room.get(interaction.connection_id)
+        if room is None:
+            return
+        with self.lock:
+            session = self.by_conv.get(interaction.conversation_id)
+        if session is None or session.dead:
+            print(f"<- [{room}] tap from an unknown thread ignored")
+            return
+        session.last_seen = time.time()
+        session.handle_interaction(room, interaction)
+
+    # ------------------------------------------------------------ ticker
+    def _sweep(self):
+        for s in list(self.sessions):
+            if s.dead or not s.expired():
+                continue
+            with self.lock:
+                s.dead = True
+                s.epoch += 1     # anything still sleeping wakes up into a dead run
+                self.sessions.remove(s)
+                for conv, owner in list(self.by_conv.items()):
+                    if owner is s:
+                        del self.by_conv[conv]
+                for k, owner in list(self.by_key.items()):
+                    if owner is s:
+                        del self.by_key[k]
+            print(f"** [{s.id}] expired — {len(self.live())} runs live")
+
+    def start_ticker(self):
+        def loop():
+            while True:
+                time.sleep(10)
+                for s in self.live():
+                    try:
+                        s.director.tick()
+                    except Exception as e:
+                        print(f"!! tick failed ({s.id}): {e}")
+                try:
+                    self._sweep()
+                except Exception as e:
+                    print(f"!! sweep failed: {e}")
+        threading.Thread(target=loop, daemon=True).start()
+
+    # ------------------------------------------------------------ spectator
+    def doors(self) -> dict[str, str]:
+        """The public entry points, for the front page: only the rooms a
+        visitor can actually open. A judge who lands on the URL should be
+        one tap from playing, never hunting through a README."""
+        offer = {
+            "telegram": self.telegram_url,
+            "discord": os.getenv("DISCORD_INVITE_URL"),
+            "email": self.game_email,
+        }
+        return {room: url for room, url in offer.items() if url}
+
+    def state_snapshot(self) -> dict:
+        runs = []
+        for s in self.live():
+            try:
+                runs.append(s.snapshot())
+            except Exception as e:
+                print(f"!! snapshot failed ({s.id}): {e}")
+        runs.sort(key=lambda r: -r["active_at"])
+        return {
+            "runs": runs[:8],
+            "playing": sum(1 for r in runs if r["in_run"]),
+            "full": len(runs) >= MAX_SESSIONS,
+            "seats": MAX_SESSIONS,
+            "rooms": [{"id": r, "tag": deck.ROOM_TAGS[r],
+                       "persona": PERSONA_BY_ROOM[r].title(),
+                       "alive": True, "opened": False, "linked": False}
+                      for r in ROOMS],
+            "best_named": [int(t) for t in self.best_named],
+            "doors": self.doors(),
+        }
 
 
 def telegram_bot_url(token: str) -> str | None:

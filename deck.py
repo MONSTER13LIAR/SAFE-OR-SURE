@@ -53,21 +53,38 @@ META_EMAIL_TEXT = "their email address is {v}"
 # The verbatim echo: the player's own typed words, in another mouth.
 ECHO_TEXT = 'they once typed, in another app, exactly this: "{v}"'
 
-# Maria hands out Deke's door herself — the README is not the onboarding,
-# the conversation is. Hand-written, sent as a follow-up text.
-INVITE_DROP = ("oh also deke thinks youre ignoring him. he only ever "
-               "checks discord, this is his door: {url}")
-# The second drop, once, for a player who proved a link but still hasn't
-# said hi to Deke — without his room the run can't be won.
-INVITE_NUDGE = ("ok deke is officially sulking now. just say hi to him, "
-                "for me: {url}")
+# The rooms hand out each other's doors — the README is not the
+# onboarding, the conversation is. Whichever room the player found first
+# becomes their guide, so every one of these is somebody's first line.
+# Keyed (the room talking, the room it's handing over).
+DOOR_DROP = {
+    ("telegram", "discord"): ("oh also deke thinks youre ignoring him. he only "
+                              "ever checks discord, this is his door: {url}"),
+    ("discord", "telegram"): ("maria keeps asking if youve turned up. shes on "
+                              "telegram and she wont let this go: {url}"),
+    ("email", "telegram"): ("Maria says you never answer her. I said I would "
+                            "pass this on and now I have. {url}\n\np."),
+    ("email", "discord"): ("Deke messaged you and got nothing back, apparently. "
+                           "He is only ever on discord. {url}\n\np."),
+}
+# The second, firmer drop — once, for a player who proved a link but still
+# hasn't opened a room they need to win.
+DOOR_NUDGE = {
+    ("telegram", "discord"): ("ok deke is officially sulking now. just say hi "
+                              "to him, for me: {url}"),
+    ("discord", "telegram"): "message maria. shes worse than me about it: {url}",
+    ("email", "telegram"): ("Last time I mention it, then it is your problem. "
+                            "{url}\n\np."),
+    ("email", "discord"): ("He asked again. I am only the messenger here. "
+                           "{url}\n\np."),
+}
 
 # ---------------------------------------------------------------- fixed beats
 # First block ever: a surviving room sends this, verbatim, seconds later.
 SEAL_FIRST = "felt good, didn't it."
 
-# One run at a time: a second person mid-run gets this, not a hijacked game.
-BUSY = "someone's mid-run right now. give it a few minutes and say hi again."
+# Every seat taken: the game is full, not broken. Said once, kindly.
+BUSY = "too many people in here at once. give it a few minutes and say hi again."
 
 # Model-down fallbacks: if generation fails twice on a load-bearing beat,
 # these ship instead of silence. In voice, hand-written.

@@ -24,7 +24,13 @@ IDLE_PING_MAX = 2   # then the game goes dormant — never texts a gone player f
 CHAT_LEAK_EVERY = 2 if DEMO_PACE else 3  # every Nth plain chat reply may leak
 QUIET_AFTER_FLAG = 30 if DEMO_PACE else 60  # flagged persona goes quiet, knowing
 ECHO_AFTER = 60 if DEMO_PACE else 120   # earliest the verbatim echo may fire
-EMAIL_ASK_AT = (2, 6)  # chat turns in a room before the 1st and 2nd email ask
+EMAIL_ASK_AT = (2, 6)   # chat turns in a room before the 1st and 2nd email ask
+HANDLE_ASK_AT = (4, 9)  # ...and before asking which name to look for on discord
+# Which door each room hands out, in the order it tries them. Whoever the
+# player found first becomes their guide into the rooms they haven't opened.
+DOORS_FROM = {"telegram": ("discord",),
+              "discord": ("telegram",),
+              "email": ("telegram", "discord")}
 
 # A phrase the player typed is echo-worthy if it's distinctive and safe to
 # repeat: no persona names, no game verbs, no addresses.
@@ -39,8 +45,8 @@ DENY_PATTERNS = ("same person", "same guy", "same girl", "same thing",
 
 
 class Director:
-    def __init__(self, game):
-        self.game = game  # provides .ledger .mind .deliver_beat(room, beat, **kw)
+    def __init__(self, run):
+        self.run = run  # provides .ledger .mind .deliver_beat(room, beat, **kw)
         self.last_player_action = time.time()
         self.last_leak_at = 0.0
         self.last_idle_at = 0.0
@@ -50,19 +56,20 @@ class Director:
         self.first_seal_reacted = False
         self.idle_pings = 0
         self.email_asks = 0
-        self.invite_sent = False
-        self.invite_nudged = False
+        self.handle_asks = 0
+        self.doors_dropped: set[str] = set()
+        self.doors_nudged: set[str] = set()
         self.echo_done = False
         self.phrases: list[tuple[str, str]] = []  # (room, verbatim text)
 
     # ------------------------------------------------------------ helpers
     @property
     def ledger(self):
-        return self.game.ledger
+        return self.run.ledger
 
     @property
     def mind(self):
-        return self.game.mind
+        return self.run.mind
 
     def _open_alive(self, exclude=()):
         return [r for r in ROOMS
@@ -125,7 +132,7 @@ class Director:
         if self._quiet(room):
             return {"beat": None}  # it noticed you noticed. no reply.
         self.chat_count[room] += 1
-        self.maybe_drop_invite()
+        self.maybe_drop_doors(room)
         # Asked point-blank? Amused, unbothered — and if a leak is
         # available for this room, it rides along in the answer.
         low = text.lower()
@@ -144,11 +151,23 @@ class Director:
         # find them. Only while email is a stranger's door and we know no
         # address; at most twice, and never so early it feels like a form.
         if (not self.ledger.opened["email"]
-                and self.game.player_email is None
+                and self.run.player_email is None
                 and self.email_asks < len(EMAIL_ASK_AT)
                 and self.chat_count[room] >= EMAIL_ASK_AT[self.email_asks]):
             self.email_asks += 1
             return {"beat": "harvest_email"}
+        # And the other missing door: Deke can't be messaged first, so the
+        # only way to know the stranger who DMs him is the player's own
+        # word for who they are over there.
+        if (room != "discord"
+                and not self.ledger.opened["discord"]
+                and self.ledger.alive["discord"]
+                and "discord" in self.doors_dropped
+                and not self.run.expect.get("discord")
+                and self.handle_asks < len(HANDLE_ASK_AT)
+                and self.chat_count[room] >= HANDLE_ASK_AT[self.handle_asks]):
+            self.handle_asks += 1
+            return {"beat": "harvest_handle"}
         offer = self.chat_count[room] % 2 == 0 and bool(self.mind.unplanted())
         return {"beat": "chat", "offer_plants": offer}
 
@@ -165,18 +184,22 @@ class Director:
         self.phrases.append((room, t))
         self.phrases = self.phrases[-8:]
 
-    def maybe_drop_invite(self):
-        """Maria hands out Deke's discord invite once the player is warmed
-        up (or has already handed over an email). Fixed copy, her room."""
-        if (self.invite_sent or self.ledger.opened["discord"]
-                or not self.ledger.alive["discord"]
-                or not self.ledger.opened["telegram"]
-                or not os.getenv("DISCORD_INVITE_URL")):
+    def maybe_drop_doors(self, room):
+        """Whichever room the player found first hands out the ones they
+        haven't opened — the conversation is the onboarding, and any room
+        can be the way in. Once each, warmed up, fixed copy."""
+        if self.ledger.ending or not self.ledger.opened[room]:
             return
-        if self.chat_count["telegram"] < 3 and self.game.player_email is None:
+        if self.chat_count[room] < 3 and self.run.player_email is None:
             return
-        self.invite_sent = True
-        self.game.send_invite_drop()
+        for target in DOORS_FROM.get(room, ()):
+            if (target in self.doors_dropped or self.ledger.opened[target]
+                    or not self.ledger.alive[target]
+                    or not self.run.door_url(target)):
+                continue
+            self.doors_dropped.add(target)
+            self.run.send_door_drop(room, target)
+            return
 
     def on_plant(self, room: str, fact):
         """A fact just entered the Mind. Echo it somewhere else soon."""
@@ -185,7 +208,7 @@ class Director:
         threading.Timer(delay, self._delayed_leak, args=(fact,)).start()
 
     def _delayed_leak(self, fact):
-        if self.game.director is not self:
+        if self.run.director is not self:
             return  # a reset happened while this timer slept — dead run's leak
         if self.ledger.ending or fact.origin is None:
             return
@@ -195,24 +218,26 @@ class Director:
             return
         room = "email" if ("email" in targets and self.ledger.proven) else random.choice(targets)
         self.last_leak_at = time.time()
-        self.game.deliver_beat(room, "leak", leak_facts=[fact])
+        self.run.deliver_beat(room, "leak", leak_facts=[fact])
 
     def on_correct_flag(self, flagged_room: str):
         """Correct flag -> the caught persona goes quiet, knowing, and a
         different room escalates. Escalation may only reuse facts along
         links already proven (rage-flagging it = old news)."""
         self.quiet_until[flagged_room] = time.time() + QUIET_AFTER_FLAG
-        # A player with a proven link who never opened Deke's door is in an
-        # unwinnable run and doesn't know it. Maria re-drops the invite,
-        # once, at the moment they're most invested.
-        if (self.invite_sent and not self.invite_nudged
-                and not self.ledger.opened["discord"]
-                and self.ledger.alive["discord"]
-                and self.ledger.opened["telegram"]
-                and self.ledger.alive["telegram"]
-                and os.getenv("DISCORD_INVITE_URL")):
-            self.invite_nudged = True
-            self.game.send_invite_drop(nudge=True)
+        # A player with a proven link who never opened a room is in an
+        # unwinnable game and doesn't know it. Re-drop that door, once, at
+        # the moment they're most invested.
+        for shut in ROOMS:
+            if (shut in self.doors_dropped and shut not in self.doors_nudged
+                    and not self.ledger.opened[shut] and self.ledger.alive[shut]
+                    and self.run.door_url(shut)):
+                for host in self._open_alive():
+                    if shut in DOORS_FROM.get(host, ()):
+                        self.doors_nudged.add(shut)
+                        self.run.send_door_drop(host, shut, nudge=True)
+                        break
+                break
         targets = self._open_alive(exclude=(flagged_room,))
         if not targets:
             return
@@ -220,7 +245,7 @@ class Director:
         self.escalation[room] += 1
         allowed = [f for f in self.mind.leakable()
                    if f.origin != room and f.origin in self.ledger.linked_rooms(room)]
-        self.game.deliver_beat(room, "escalate", allowed_facts=allowed)
+        self.run.deliver_beat(room, "escalate", allowed_facts=allowed)
 
     def on_wrong_flag(self, flagged_room: str, accused_persona: str):
         """Wrong flag -> the personas close ranks in another room. The
@@ -233,7 +258,7 @@ class Director:
         if not targets:
             return
         room = random.choice(targets)
-        self.game.deliver_beat(
+        self.run.deliver_beat(
             room, "gaslight", leak_facts=[acc],
             notes=f"they accused {accused_persona}, in another app, of saying things a stranger shouldn't know",
         )
@@ -248,9 +273,9 @@ class Director:
             # The first block ever gets the fixed line, verbatim, seconds
             # later — never a model roll of the dice at the hottest moment.
             self.first_seal_reacted = True
-            self.game.send_seal_sting(room)
+            self.run.send_seal_sting(room)
             return
-        self.game.deliver_beat(
+        self.run.deliver_beat(
             room, "seal_react",
             notes=f"the room that went quiet was {sealed_persona}'s",
         )
@@ -288,7 +313,7 @@ class Director:
             if pick:
                 room, fact = pick
                 self.last_leak_at = now
-                self.game.deliver_beat(room, "leak", leak_facts=[fact])
+                self.run.deliver_beat(room, "leak", leak_facts=[fact])
                 return
         # The verbatim echo: once per run, mid-game, the player's own words
         # come back word for word wearing a different name.
@@ -300,7 +325,7 @@ class Director:
                 self.echo_done = True
                 fact = self.mind.add_echo(origin_room, phrase)
                 self.last_leak_at = now
-                self.game.deliver_beat(target, "echo", leak_facts=[fact])
+                self.run.deliver_beat(target, "echo", leak_facts=[fact])
                 return
         # Idle player: silence escalates too — but only twice. Past that
         # they're gone, and a game that keeps texting a gone person is
@@ -312,4 +337,4 @@ class Director:
             if loud:
                 self.last_idle_at = now
                 self.idle_pings += 1
-                self.game.deliver_beat(random.choice(loud), "idle")
+                self.run.deliver_beat(random.choice(loud), "idle")
