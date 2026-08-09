@@ -41,6 +41,7 @@ class Game:
         self.conn_to_room: dict[str, str] = {}
         self.conversations: dict[str, str] = {}   # room -> conversation_id
         self.game_email: str | None = None        # our own address, never harvested
+        self.telegram_url = os.getenv("TELEGRAM_BOT_URL") or None  # the front page's first door
         self.epoch = 0            # bumped on reset; sleeping threads check it
         self.best_named: list[float] = []  # fastest NAMED times, seconds, this boot
         self.reset()
@@ -757,6 +758,17 @@ class Game:
         threading.Thread(target=loop, daemon=True).start()
 
     # ------------------------------------------------------------ spectator
+    def doors(self) -> dict[str, str]:
+        """The public entry points, for the front page: only the rooms a
+        visitor can actually open right now. A judge who lands on the URL
+        should be one tap from playing, never hunting through a README."""
+        offer = {
+            "telegram": self.telegram_url,
+            "discord": os.getenv("DISCORD_INVITE_URL"),
+            "email": self.game_email,
+        }
+        return {room: url for room, url in offer.items() if url}
+
     def state_snapshot(self) -> dict:
         """What the constellation page may see: the shape of the run, never
         a word of the conversation."""
@@ -785,7 +797,23 @@ class Game:
                 "run_seconds": secs,
                 "in_run": in_run,
                 "best_named": [int(t) for t in self.best_named],
+                "doors": self.doors(),
             }
+
+
+def telegram_bot_url(token: str) -> str | None:
+    """Ask Telegram what the bot is publicly called, so the front page can
+    offer its door without one more env var to fill in."""
+    import json
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+                f"https://api.telegram.org/bot{token}/getMe", timeout=10) as r:
+            name = (json.load(r).get("result") or {}).get("username")
+        return f"https://t.me/{name}" if name else None
+    except Exception as e:
+        print(f"!! telegram getMe failed: {e}")
+        return None
 
 
 def connect(client: CommClient, game: Game):
@@ -794,9 +822,11 @@ def connect(client: CommClient, game: Game):
     game.game_email = email.get("address")
     print(f"email    {email.get('address')}")
 
-    tg = client.connect_telegram(bot_token=os.environ["TELEGRAM_BOT_TOKEN"])
+    tg_token = os.environ["TELEGRAM_BOT_TOKEN"]
+    tg = client.connect_telegram(bot_token=tg_token)
     game.conn_to_room[tg["id"]] = "telegram"
-    print(f"telegram {tg['id']} (Maria)")
+    game.telegram_url = game.telegram_url or telegram_bot_url(tg_token)
+    print(f"telegram {tg['id']} (Maria) {game.telegram_url or ''}")
 
     if token := os.getenv("DISCORD_BOT_TOKEN"):
         dc = client.connect_discord(bot_token=token)

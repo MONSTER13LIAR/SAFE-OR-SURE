@@ -28,6 +28,11 @@ No app, no account, no API key — it costs you (and us) nothing, because
 it runs on a free open model. (If nobody answers, the instance is between
 sessions — it's live through the judging window.)
 
+**[safe-or-sure.onrender.com](https://safe-or-sure.onrender.com)** has all
+three doors on it, and draws the run as it happens — rooms as dots, every
+link you prove in amber, no message content. It's the spectator view and the
+front door at once; if someone else is mid-run, it tells you before you tap.
+
 Impatient, or skipped Maria's questions? Open the doors yourself:
 
 - **Discord** — join [discord.gg/kuhHK7e85n](https://discord.gg/kuhHK7e85n),
@@ -65,7 +70,7 @@ three people. Prove it.
    inbox has no block button.
 
 **The scoreboard** rides under every message:
-`tg◉ dc✕ em◌ · ⚑ 4 · 2 rooms up` means Telegram is woven into your web
+`tg◉ dc✕ em◌ · ⚑ 4 left · 2 rooms up` means Telegram is woven into your web
 (◉), Discord is sealed (✕), your inbox isn't linked yet (◌); four flags
 left; two rooms still alive.
 
@@ -136,6 +141,10 @@ conversation too.
 
 `RUN_PACE=demo` tightens every timer for a ~3–4 minute run (the default pace
 is a 5–6 minute game).
+
+Set `PORT` (hosts like Render set it for you) and the same process serves the
+live page at `/` — the constellation plus your three doors. Telegram's door is
+discovered from your bot token automatically; `TELEGRAM_BOT_URL` overrides it.
 
 ```sh
 .venv/bin/python game.py

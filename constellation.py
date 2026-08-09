@@ -2,6 +2,11 @@
 
 Served at `/` by the game's HTTP server. Shows the shape of the run —
 rooms, the proven web, the clock — and never a word of message content.
+
+It is also the front door: the three rooms are listed as tappable doors,
+fed by `/state.json`, so a visitor who has never read the README can be
+in the game in one tap. When someone else is mid-run, the doors say so
+instead of letting the visitor bounce off a BUSY line.
 """
 
 PAGE = r"""<!doctype html>
@@ -10,6 +15,11 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SAFE OR SURE</title>
+<meta name="description" content="Three strangers message you across Telegram, Discord and your inbox. They are one thing. Prove it — you have six flags.">
+<meta property="og:title" content="SAFE OR SURE">
+<meta property="og:description" content="Three strangers, three apps, one thing. Prove it before you seal yourself in.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='9' fill='%23e8a13a'/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #0d0d0f;
@@ -19,8 +29,9 @@ PAGE = r"""<!doctype html>
     --accent: #e8a13a;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; }
+  html { height: 100%; }
   body {
+    min-height: 100%;
     background: var(--bg);
     color: var(--ink);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -28,9 +39,11 @@ PAGE = r"""<!doctype html>
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 4vmin 16px;
+    padding: 5vmin 20px;
     overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
   }
+  main { width: 100%; max-width: 460px; }
   header { text-align: center; }
   h1 {
     font-size: clamp(1.1rem, 3.2vmin, 1.6rem);
@@ -43,11 +56,15 @@ PAGE = r"""<!doctype html>
     color: var(--dim);
     font-size: clamp(.72rem, 1.9vmin, .85rem);
     letter-spacing: .06em;
+    text-align: center;
   }
-  .sky { margin: 3vmin 0 1vmin; }
+  .sky { margin: 2.4vmin 0 1vmin; }
   svg {
+    /* viewBox is cropped tight to the three nodes and their labels, so the
+       doors below stay above the fold on a laptop. */
     display: block;
-    width: min(88vw, 62vmin, 460px);
+    margin: 0 auto;
+    width: min(88vw, 70vmin, 380px);
     height: auto;
   }
   .weblink {
@@ -90,8 +107,18 @@ PAGE = r"""<!doctype html>
     margin-top: 1.5vmin;
   }
   .strip .flag { color: var(--accent); }
+  .key {
+    margin-top: 1.1em;
+    text-align: center;
+    color: var(--dim);
+    font-size: .68rem;
+    letter-spacing: .1em;
+    opacity: 0;
+    transition: opacity .4s ease;
+  }
+  .key.show { opacity: .8; }
   .stateline {
-    margin-top: 3.2vmin;
+    margin-top: 2.6vmin;
     min-height: 1.6em;
     font-size: clamp(.82rem, 2.3vmin, 1rem);
     letter-spacing: .14em;
@@ -99,24 +126,87 @@ PAGE = r"""<!doctype html>
     text-align: center;
   }
   .stateline.dormant { color: var(--dim); letter-spacing: .06em; }
+
+  /* the doors */
+  .doors { margin-top: 2.8vmin; }
+  .door {
+    display: flex;
+    align-items: center;
+    gap: 1em;
+    padding: .95em .2em;
+    border-top: 1px solid var(--faint);
+    color: var(--ink);
+    text-decoration: none;
+    font-size: clamp(.78rem, 2.1vmin, .9rem);
+    transition: color .2s ease, opacity .3s ease, padding-left .2s ease;
+  }
+  .doors .door:last-of-type { border-bottom: 1px solid var(--faint); }
+  .door .tag {
+    color: var(--faint);
+    letter-spacing: .1em;
+    width: 2.2em;
+    flex: none;
+    transition: color .2s ease;
+  }
+  .door .who { flex: 1; letter-spacing: .04em; min-width: 0; }
+  .door .who.addr { font-size: .84em; }
+  .door .who.addr span {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .door .who b { font-weight: 600; }
+  .door .who span { color: var(--dim); font-weight: 400; }
+  .door .go { color: var(--dim); letter-spacing: .08em; flex: none; }
+  .door:hover, .door:focus-visible { color: var(--accent); padding-left: .5em; outline: none; }
+  .door:hover .tag, .door:focus-visible .tag { color: var(--accent); }
+  .door:hover .go, .door:focus-visible .go { color: var(--accent); }
+  .copy {
+    background: none;
+    border: 1px solid var(--faint);
+    color: var(--dim);
+    font: inherit;
+    font-size: .82em;
+    letter-spacing: .08em;
+    padding: .3em .7em;
+    cursor: pointer;
+    flex: none;
+    transition: color .2s ease, border-color .2s ease;
+  }
+  .copy:hover, .copy:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+  .doorline {
+    margin-top: 1.3em;
+    color: var(--dim);
+    font-size: clamp(.7rem, 1.8vmin, .78rem);
+    letter-spacing: .05em;
+    text-align: center;
+  }
+  .doors.busy .door { opacity: .35; }
+  .doors.busy .doorline { color: var(--accent); opacity: .85; }
   footer {
     margin-top: 4vmin;
     color: var(--dim);
     font-size: clamp(.68rem, 1.7vmin, .78rem);
     letter-spacing: .06em;
+    text-align: center;
     display: none;
   }
   footer.show { display: block; }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  }
 </style>
 </head>
 <body>
+ <main>
   <header>
     <h1>SAFE OR SURE</h1>
     <p class="tagline">You can be safe or you can be sure. Not both.</p>
   </header>
 
   <div class="sky">
-    <svg id="sky" viewBox="0 0 440 440" aria-label="constellation">
+    <svg id="sky" viewBox="24 34 392 300" aria-label="constellation">
       <g id="glinks"></g>
       <g id="gnodes"></g>
     </svg>
@@ -128,9 +218,17 @@ PAGE = r"""<!doctype html>
     <span id="up">&mdash;</span>
   </div>
 
+  <p class="key" id="key">&#9676; open &nbsp;·&nbsp; &#9673; linked &nbsp;·&nbsp; &#10005; sealed</p>
+
   <p class="stateline" id="stateline">&nbsp;</p>
 
+  <nav class="doors" id="doors" hidden>
+    <div id="doorrows"></div>
+    <p class="doorline" id="doorline"></p>
+  </nav>
+
   <footer id="foot"></footer>
+ </main>
 
 <script>
 (function () {
@@ -142,16 +240,22 @@ PAGE = r"""<!doctype html>
   var elClock = document.getElementById("clock");
   var elFlags = document.getElementById("flags");
   var elUp = document.getElementById("up");
+  var elKey = document.getElementById("key");
   var elState = document.getElementById("stateline");
+  var elDoors = document.getElementById("doors");
+  var elDoorRows = document.getElementById("doorrows");
+  var elDoorLine = document.getElementById("doorline");
   var elFoot = document.getElementById("foot");
   var NS = "http://www.w3.org/2000/svg";
 
   var pos = {};          // room id -> {x, y}
   var nodeEls = {};      // room id -> <g>
   var roomKey = "";
+  var doorKey = "";
   var seenLinks = {};    // "a|b" -> true
   var collapsed = false;
   var baseSeconds = null, baseAt = 0, running = false, ended = false;
+  var WHERE = { telegram: "on telegram", discord: "on discord", email: "by email" };
 
   function fmt(t) {
     t = Math.max(0, Math.floor(t));
@@ -214,6 +318,98 @@ PAGE = r"""<!doctype html>
     }
   }
 
+  // --------------------------------------------------------------- doors
+  function copyText(text, btn) {
+    function done() {
+      var was = btn.textContent;
+      btn.textContent = "copied";
+      setTimeout(function () { btn.textContent = was; }, 1600);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
+    function fallback() {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      if (ok) done(); else btn.textContent = text;
+    }
+  }
+
+  function buildDoors(rooms, doors) {
+    elDoorRows.textContent = "";
+    var any = false;
+    for (var i = 0; i < rooms.length; i++) {
+      var r = rooms[i] || {};
+      var id = String(r.id);
+      var target = doors[id];
+      if (!target) continue;
+      any = true;
+      var isMail = id === "email";
+      var a = document.createElement("a");
+      a.className = "door";
+      a.href = isMail ? "mailto:" + target + "?subject=hi" : target;
+      if (!isMail) { a.target = "_blank"; a.rel = "noopener"; }
+
+      var tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = r.tag || id;
+      a.appendChild(tag);
+
+      var who = document.createElement("span");
+      who.className = "who";
+      var name = document.createElement("b");
+      name.textContent = r.persona || id;
+      who.appendChild(name);
+      var where = document.createElement("span");
+      where.textContent = " " + (WHERE[id] || id);
+      who.appendChild(where);
+      a.appendChild(who);
+
+      var go = document.createElement("span");
+      go.className = "go";
+      go.textContent = isMail ? "write →" : "say hi →";
+      a.appendChild(go);
+      elDoorRows.appendChild(a);
+
+      if (isMail) {
+        var wrap = document.createElement("div");
+        wrap.className = "door";
+        wrap.style.borderTop = "none";
+        wrap.style.paddingTop = "0";
+        var spacer = document.createElement("span");
+        spacer.className = "tag";
+        wrap.appendChild(spacer);
+        var addr = document.createElement("span");
+        addr.className = "who addr";
+        var s = document.createElement("span");
+        s.textContent = target;      // long: ellipsised, the button has the whole of it
+        s.title = target;
+        addr.appendChild(s);
+        wrap.appendChild(addr);
+        var btn = document.createElement("button");
+        btn.className = "copy";
+        btn.type = "button";
+        btn.textContent = "copy";
+        (function (address, button) {
+          button.addEventListener("click", function () { copyText(address, button); });
+        })(target, btn);
+        wrap.appendChild(btn);
+        elDoorRows.appendChild(wrap);
+      }
+    }
+    elDoors.hidden = !any;
+  }
+
   function collapse() {
     // Declarative on purpose: the target is set once and the CSS
     // transition owns the motion — a JS animation loop can stall,
@@ -242,6 +438,7 @@ PAGE = r"""<!doctype html>
     var ending = typeof s.ending === "string" ? s.ending : null;
     var inRun = !!s.in_run;
     var best = Array.isArray(s.best_named) ? s.best_named : [];
+    var doors = (s.doors && typeof s.doors === "object") ? s.doors : {};
 
     // clock base
     baseSeconds = (typeof s.run_seconds === "number" && isFinite(s.run_seconds))
@@ -292,8 +489,24 @@ PAGE = r"""<!doctype html>
 
     // strip
     elFlags.textContent = (typeof s.flags_left === "number" && isFinite(s.flags_left))
-      ? s.flags_left : "—";
+      ? s.flags_left + " left" : "—";
     elUp.textContent = alive + " rooms up";
+    // The dot key earns its space only once the dots start meaning things.
+    elKey.className = (inRun || ended) && !collapsed ? "key show" : "key";
+
+    // doors (rebuild only when what's on offer changes)
+    var dkey = rooms.map(function (r) {
+      return r && r.id + ":" + (doors[r && r.id] || "");
+    }).join("|");
+    if (dkey !== doorKey) {
+      doorKey = dkey;
+      buildDoors(rooms, doors);
+    }
+    elDoors.className = inRun ? "doors busy" : "doors";
+    elDoorLine.textContent = inRun
+      ? "someone's mid-run. the seat frees up when they finish."
+      : (ended ? "that run just ended. say hi and take the seat."
+               : "start with Maria. she hands you the other two.");
 
     // state line
     if (ending === "NAMED") {

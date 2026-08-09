@@ -155,4 +155,4 @@ ROOM_TAGS = {"telegram": "tg", "discord": "dc", "email": "em"}
 
 
 def hud_line(dots: str, flags_left: int, alive: int) -> str:
-    return f"{dots} · ⚑ {flags_left} · {alive} rooms up"
+    return f"{dots} · ⚑ {flags_left} left · {alive} rooms up"
