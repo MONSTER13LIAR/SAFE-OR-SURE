@@ -18,6 +18,7 @@ from caspian_sdk import blocks as b
 import deck
 import personas
 from director import DEMO_PACE, Director
+from director import local_hour as director_local_hour
 from ledger import ROOMS, Ledger
 from mind import Mind
 
@@ -1088,6 +1089,10 @@ class Game:
                       for r in ROOMS],
             "best_named": [int(t) for t in self.best_named],
             "doors": self.doors(),
+            # Which commit is actually serving. Without it there is no way
+            # to tell a deployed fix from a fix that quietly didn't ship.
+            "build": (os.getenv("RENDER_GIT_COMMIT") or "")[:7],
+            "clock": f"{director_local_hour():02d}h",
         }
 
 

@@ -24,6 +24,20 @@ IDLE_PING_MAX = 2   # then the game goes dormant — never texts a gone player f
 CHAT_LEAK_EVERY = 2 if DEMO_PACE else 3  # every Nth plain chat reply may leak
 QUIET_AFTER_FLAG = 30 if DEMO_PACE else 60  # flagged persona goes quiet, knowing
 ECHO_AFTER = 60 if DEMO_PACE else 120   # earliest the verbatim echo may fire
+# The "up late?" beat needs a wall clock, and a host box runs on UTC. Env
+# vars on a host can silently not apply (a blueprint edit doesn't reach a
+# running service), so the offset lives here instead: India has no DST, so
+# a fixed offset is exact and needs no tz database either.
+LOCAL_UTC_OFFSET = float(os.getenv("GAME_UTC_OFFSET", "5.5"))
+
+
+def local_hour(now: float | None = None) -> int:
+    """The player's likely hour of day. Their zone is unknowable; this is
+    the audience's, and nothing more specific than the hour is ever used."""
+    return int(((now if now is not None else time.time()) / 3600
+                + LOCAL_UTC_OFFSET) % 24)
+
+
 EMAIL_ASK_AT = (2, 6)   # chat turns in a room before the 1st and 2nd email ask
 HANDLE_ASK_AT = (4, 9)  # ...and before asking which name to look for on discord
 # Which door each room hands out, in the order it tries them. Whoever the
@@ -122,11 +136,7 @@ class Director:
         self.note_player_action()
         if not self.ledger.opened[room]:
             kw = {"beat": "greet", "offer_plants": True}
-            # The host's clock, not the player's — we have no way to know
-            # theirs. Set TZ to the audience's zone (render.yaml pins
-            # Asia/Kolkata); on a UTC box this beat would fire at their
-            # breakfast and never at their midnight.
-            hour = time.localtime().tm_hour
+            hour = local_hour()
             if hour >= 23 or hour < 5:
                 # Warmth + knowing too much, in message one. Nothing more
                 # specific than the hour — that starts to cosplay surveillance.

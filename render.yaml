@@ -6,10 +6,8 @@ services:
     buildCommand: pip install caspian-sdk
     startCommand: python game.py
     envVars:
-      # The "up late?" greeting reads the host clock, so pin it to the
-      # audience's zone instead of the box's UTC.
-      - key: TZ
-        value: Asia/Kolkata
+      # No TZ here on purpose: a blueprint edit doesn't reach an already
+      # running service, so the wall clock lives in code (GAME_UTC_OFFSET).
       - key: CASPIAN_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
