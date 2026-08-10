@@ -22,7 +22,11 @@ from ledger import ROOMS, Ledger
 from mind import Mind
 
 PERSONA_BY_ROOM = {"telegram": "maria", "discord": "deke", "email": "priya"}
-BLOCK_POLL_SECONDS = (3, 6, 9, 13)  # still `queued` after the last poll => sealed
+# Seconds after sending to re-check delivery. A healthy send flips out of
+# `queued` in ~2s, so anything still queued at the end is a block. The tail
+# is long on purpose: under gateway load a slow send must not be mistaken
+# for a sealed room — a false seal can end someone's run outright.
+BLOCK_POLL_SECONDS = (3, 6, 10, 14, 20)
 # Cold open: say hi to one stranger and the other two find you. Seconds
 # between the player's first hello and each unprompted first contact.
 COLD_OPEN_DELAY = (8, 15) if DEMO_PACE else (15, 30)
@@ -67,6 +71,7 @@ class Session:
         self.conversations: dict[str, str] = {}   # room -> conversation_id
         self.keys: dict[str, str] = {}            # room -> who the player is there
         self.expect: dict[str, list[str]] = {}    # room -> handles they gave us
+        self.told_to_dm: set[str] = set()         # people who spoke up in a shared thread
         self.epoch = 0            # bumped on restart; sleeping threads check it
         self.dead = False
         self.last_seen = time.time()
@@ -238,6 +243,16 @@ class Session:
             # The bare phrase IS the message; the echo fixup fills the rest.
             return personas.PersonaTurn(message=leak_facts[0].value,
                                         facts_used=[leak_facts[0].id])
+        # Beats where the player is sitting there waiting. A leak never
+        # falls back — its whole job is to carry the fact — so the Director
+        # re-arms it instead (on_send_failed).
+        table = {"chat": deck.FALLBACK_CHAT,
+                 "react_plant": deck.FALLBACK_CHAT,
+                 "deny": deck.FALLBACK_DENY,
+                 "harvest_email": deck.FALLBACK_ASK_EMAIL,
+                 "harvest_handle": deck.FALLBACK_ASK_HANDLE}.get(beat)
+        if table and (line := table.get(persona)):
+            return personas.PersonaTurn(message=line, facts_used=[])
         return None
 
     def _send(self, room, payload_blocks, inbound=None):
@@ -271,10 +286,12 @@ class Session:
 
         def watch():
             conv = self.conversations.get(room)
-            if not conv:
-                return
-            for _ in range(4):
-                time.sleep(3.5)
+            if not conv or not BLOCK_POLL_SECONDS:
+                return  # no schedule = no evidence; never seal on a hunch
+            waited = 0.0
+            for at in BLOCK_POLL_SECONDS:
+                time.sleep(max(0.0, at - waited))
+                waited = at
                 if self.epoch != epoch:
                     return  # reset mid-watch: never seal a fresh run's room
                 try:
@@ -493,9 +510,25 @@ class Session:
             t.join(timeout=30)
 
     # ------------------------------------------------------------ inbound
-    def handle_message(self, room, message):
+    def handle_message(self, room, message, key=None):
         """The player of THIS run said something in one of their rooms.
         Routing already decided the run; nothing here can reach another."""
+        owner = self.keys.get(room)
+        if key and owner and key != owner:
+            # A second person in the same thread means this isn't a DM —
+            # a server channel, or a cc'd mail thread. Two strangers can't
+            # share one run (they'd burn each other's flags), and a game
+            # built on private knowledge shouldn't be played in public.
+            if key not in self.told_to_dm:
+                self.told_to_dm.add(key)
+                line = deck.NOT_IN_PUBLIC.get(PERSONA_BY_ROOM[room])
+                print(f"<- [{self.id}/{room}] {key!r} spoke up in a shared thread")
+                if line:
+                    try:
+                        message.reply(text=line)
+                    except Exception as e:
+                        print(f"!! dm nudge failed ({room}): {e}")
+            return
         self.conversations[room] = message.conversation_id
         text = (message.text or "").strip()
         print(f"<- [{self.id}/{room}] {text!r}")
@@ -646,8 +679,12 @@ class Session:
             self._broadcast([(r, deck.ENDING_NAMED) for r in open_alive])
         elif ending == "CORNERED":
             # Name, deterministically, what each block burned — the loss
-            # must decode to specific choices, never to "rigged".
-            body = deck.ENDING_CORNERED
+            # must decode to specific choices, never to "rigged". And the
+            # copy depends on whether they ever found the room with no
+            # block button: sealing yourself in before meeting Priya is a
+            # different ending than sealing yourself in with her.
+            body = (deck.ENDING_CORNERED if self.conversations.get("email")
+                    else deck.ENDING_CORNERED_NO_INBOX)
             burned = [
                 deck.CORNERED_BURNED.format(
                     persona=PERSONA_BY_ROOM[r].title(), fact=f.label)
@@ -656,12 +693,35 @@ class Session:
             ]
             if burned:
                 body += "\n\n" + deck.CORNERED_BURNED_HEADER + "\n" + "\n".join(burned)
-            self.send_text("email", body)
+            self._say_ending(body)
         elif ending == "SWARMED":
             # The same sentence, every room, one buzz.
             self._broadcast([(r, deck.ENDING_SWARMED) for r in open_alive])
-            self.send_text("email", deck.ENDING_SWARMED_CODA)
+            self._say_ending(deck.ENDING_SWARMED_CODA)
         self._send_case_file(ending)
+
+    def _reachable_rooms(self) -> list[str]:
+        """Where the player can still be reached, inbox first — that's the
+        room with no block button, and act 3 belongs to it. A run that
+        never opened email must still get its ending: silence at the end
+        of a game reads as broken, not as an ending."""
+        rooms = [r for r in ROOMS
+                 if self.conversations.get(r) and self.ledger.alive[r]]
+        rooms.sort(key=lambda r: r != "email")
+        return rooms
+
+    def _say_ending(self, body) -> bool:
+        for room in self._reachable_rooms():
+            if self.send_text(room, body):
+                return True
+        if (addr := self.player_email) and (conn := self.room_conn().get("email")):
+            try:
+                self.client.initiate(conn, addr, body)
+                return True
+            except Exception as e:
+                print(f"!! ending initiate failed: {e}")
+        print(f"!! [{self.id}] nowhere to send the ending")
+        return False
 
     def _case_cover_note(self, ending, sealed):
         """Priya opens the case file in her own voice — generated post-run,
@@ -733,18 +793,19 @@ class Session:
         if note := self._case_cover_note(ending, sealed):
             lines.insert(0, note + "\n")
         body = "\n".join(lines)
-        conv = self.conversations.get("email")
-        if conv:
+        # The case file is the replay driver — the one thing that must land.
+        # Inbox first, then any room they left open, then a cold start if we
+        # know their address. Only a run with no reachable room at all falls
+        # through to the log.
+        payload = [b.text(body),
+                   b.buttons([{"label": deck.RUN_IT_BACK, "value": "reset"}])]
+        for room in self._reachable_rooms():
+            conv = self.conversations.get(room)
             try:
-                self.client.send_message(conv, blocks=[
-                    b.text(body),
-                    b.buttons([{"label": deck.RUN_IT_BACK, "value": "reset"}]),
-                ])
+                self.client.send_message(conv, blocks=payload)
                 return
             except Exception as e:
-                print(f"!! case file send failed: {e}")
-        # Player never opened email: the case file (the replay driver) must
-        # still reach them — cold-start the thread if we know their address.
+                print(f"!! case file send failed ({room}): {e}")
         if (addr := self.player_email) and (conn := self.room_conn().get("email")):
             try:
                 self.client.initiate(conn, addr, body)
@@ -902,7 +963,7 @@ class Game:
                 print(f"** new run {s.id} — entered through {room} "
                       f"({len(self.live())} live)")
             s.conversations[room] = conv
-            s.keys[room] = key
+            s.keys.setdefault(room, key)   # the first voice in a room owns it
             self.by_conv[conv] = s
             self.by_key[(room, key)] = s
             s.last_seen = time.time()
@@ -920,16 +981,46 @@ class Game:
             except Exception:
                 pass
             return
-        session.handle_message(room, message)
+        key, _ = self._identity(message)
+        session.handle_message(room, message, key)
 
     def on_interaction(self, interaction):
         room = self.conn_to_room.get(interaction.connection_id)
         if room is None:
             return
+        conv = interaction.conversation_id
         with self.lock:
-            session = self.by_conv.get(interaction.conversation_id)
-        if session is None or session.dead:
+            session = self.by_conv.get(conv)
+            if session is not None and session.dead:
+                session = None
+            if session is None and (interaction.value or "") == "reset":
+                # [run it back] on a case file whose run has since been
+                # swept. The button is the whole replay loop — it must
+                # never be a tap into silence, so it opens a new run in
+                # the thread it was tapped from.
+                if len(self.live()) >= MAX_SESSIONS:
+                    session = None
+                else:
+                    self._sid += 1
+                    session = Session(self, f"r{self._sid}")
+                    self.sessions.append(session)
+                    session.conversations[room] = conv
+                    self.by_conv[conv] = session
+                    print(f"** new run {session.id} — [run it back] in {room}")
+                    try:
+                        self.client.send_message(conv, text=deck.RESET_OK)
+                    except Exception as e:
+                        print(f"!! reset ack failed ({room}): {e}")
+                    return
+        if session is None:
             print(f"<- [{room}] tap from an unknown thread ignored")
+            return
+        tapper = getattr(interaction, "sender", None) or {}
+        who = norm_handle(tapper.get("address") or tapper.get("username")
+                          or tapper.get("id") or "")
+        owner = session.keys.get(room)
+        if who and owner and who != owner:
+            print(f"<- [{room}] tap from a bystander in a shared thread ignored")
             return
         session.last_seen = time.time()
         session.handle_interaction(room, interaction)

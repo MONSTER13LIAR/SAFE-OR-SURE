@@ -40,7 +40,7 @@ import game as G  # noqa: E402
 
 G.COLD_OPEN_DELAY = (0.02, 0.03)
 G.DOOR_DROP_DELAY = (0.02, 0.03)
-G.BLOCK_POLL_SECONDS = ()
+G.BLOCK_POLL_SECONDS = (0.05,)   # the fake gateway reports nothing queued
 
 
 class FakeClient:
@@ -207,7 +207,60 @@ check("the abandoned run is gone", stranger.dead and stranger not in hub.session
 check("its threads are unrouted", "em-X" not in hub.by_conv)
 check("live runs still playable", A in hub.live() and B in hub.live())
 
-# ---------------------------------------------------------------- 10. spectator
+# ------------------------------------------------- 10. endings always land
+print("\n10. an ending always reaches the player, inbox or not")
+# Two rooms open, no inbox, then they block Deke. Winning is now
+# impossible, so the run ends — and the ending used to be posted to the
+# email room they never opened, i.e. nowhere at all.
+say("telegram", "tg-C", "hi", {"name": "Cass", "id": "u-C"})
+C = hub.by_conv["tg-C"]
+C.expect["discord"] = ["cass"]      # they answered the "whats your discord" ask
+say("discord", "dc-C", "hi", {"name": "cass", "id": "u-C-dc"})
+check("both rooms belong to the same person", hub.by_conv["dc-C"] is C)
+check("the inbox was never opened", not C.ledger.opened["email"])
+SENT.clear()
+C._room_sealed("discord")
+time.sleep(0.3)
+check("the run ended", C.ledger.ending == "CORNERED")
+reached = [t for c, t in SENT if c == "tg-C"]
+check("the ending was said somewhere they can hear it", bool(reached))
+check("no inbox means the honest copy",
+      any(isinstance(t, str) and "never opened" in t for t in reached))
+check("the case file landed too, with its button",
+      any(not isinstance(t, str) for t in reached))
+
+print("   [run it back] still works after the run has been swept")
+C.last_seen = 0
+C.director.last_player_action = 0
+C.ended_at = 0
+hub._sweep()
+check("the run was swept", C.dead)
+SENT.clear()
+tap("telegram", "tg-C", "reset")
+check("the tap opened a fresh run", hub.by_conv.get("tg-C") not in (None, C))
+check("and answered instead of going silent",
+      any(t == G.deck.RESET_OK for t in sent_to("tg-C")))
+
+# ------------------------------------------- 11. a game for two, in private
+print("\n11. a bystander in a shared thread is sent to DMs, not into the run")
+D = hub.by_conv["dc-Y"]                      # the discord stranger from step 4
+flags_before = D.ledger.flags_left
+SENT.clear()
+say("discord", "dc-Y", "wait what is this", {"name": "loud_bystander", "id": "u-Q"})
+check("the bystander was answered once",
+      any(t == G.deck.NOT_IN_PUBLIC["deke"] for t in sent_to("dc-Y")))
+check("their words never entered the run",
+      not any(h["text"] == "wait what is this" for h in D.history["discord"]))
+SENT.clear()
+say("discord", "dc-Y", "hello??", {"name": "loud_bystander", "id": "u-Q"})
+check("and not answered again", not sent_to("dc-Y"))
+hub.on_interaction(Tap(CONN["discord"], "dc-Y", "flag:t0"))
+check("their taps can't spend the player's flags",
+      D.ledger.flags_left == flags_before)
+check("the room still belongs to whoever spoke in it first",
+      D.keys["discord"] == "u-y")   # the sender id, not the display name
+
+# ---------------------------------------------------------------- 12. spectator
 print("\n10. the page sees shapes, never words")
 snap = hub.state_snapshot()
 check("one entry per live run", len(snap["runs"]) == len(hub.live()))

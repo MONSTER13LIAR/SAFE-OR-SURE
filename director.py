@@ -122,6 +122,10 @@ class Director:
         self.note_player_action()
         if not self.ledger.opened[room]:
             kw = {"beat": "greet", "offer_plants": True}
+            # The host's clock, not the player's — we have no way to know
+            # theirs. Set TZ to the audience's zone (render.yaml pins
+            # Asia/Kolkata); on a UTC box this beat would fire at their
+            # breakfast and never at their midnight.
             hour = time.localtime().tm_hour
             if hour >= 23 or hour < 5:
                 # Warmth + knowing too much, in message one. Nothing more

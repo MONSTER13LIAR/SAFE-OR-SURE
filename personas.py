@@ -21,6 +21,11 @@ import voices
 ANTHROPIC_MODEL = "claude-opus-5"
 FEATHERLESS_MODEL = os.getenv("PERSONA_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
 FEATHERLESS_URL = "https://api.featherless.ai/v1/chat/completions"
+# Open-model endpoints queue under load: measured 5-26s typical, 122s on a
+# bad evening. A turn nobody answers for two minutes is a broken game, so
+# give up early enough that the hand-written fallback still reads as a
+# person replying late rather than as a dead room.
+PERSONA_TIMEOUT = float(os.getenv("PERSONA_TIMEOUT", "45"))
 
 JSON_CONTRACT = (
     'Reply with ONLY a JSON object: {"message": "...", "facts_used": ["id", ...]} '
@@ -143,7 +148,7 @@ def _call_featherless(persona: str, prompt: str) -> PersonaTurn:
                 "temperature": 0.8,
                 "messages": messages,
             },
-            timeout=120,
+            timeout=PERSONA_TIMEOUT,
         )
         body = resp.json()
         if "choices" not in body:

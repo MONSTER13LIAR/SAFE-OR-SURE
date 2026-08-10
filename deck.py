@@ -83,6 +83,14 @@ DOOR_NUDGE = {
 # First block ever: a surviving room sends this, verbatim, seconds later.
 SEAL_FIRST = "felt good, didn't it."
 
+# Somebody else talking in the same thread — a server channel, a cc'd
+# mail. Said once, to them, in voice: this is a conversation for two.
+NOT_IN_PUBLIC = {
+    "maria": "haha hi. this is a bit public though, message me directly?",
+    "deke": "not in here. dm me",
+    "priya": "There are more people on this thread than I thought. Write to me directly.\n\np.",
+}
+
 # Every seat taken: the game is full, not broken. Said once, kindly.
 BUSY = "too many people in here at once. give it a few minutes and say hi again."
 
@@ -97,6 +105,32 @@ FALLBACK_ESCALATE = {
     "maria": "heyy you went quiet\nhaha rude\nanyway. miss you",
     "deke": "you alive\nk",
     "priya": "quiet week. hope the new place is being kind to you.\n\np.",
+}
+# When the player has just said something and the model is late, silence
+# reads as a broken game. A distracted half-answer reads as a person.
+# (No email line: nobody expects an email back inside a minute.)
+FALLBACK_CHAT = {
+    "maria": "sorry got pulled into something haha. one sec",
+    "deke": "hang on",
+}
+# Asked point-blank whether it's real. Silence here is the worst possible
+# answer — it reads as a caught-out machine, which is the one thing it
+# never is.
+FALLBACK_DENY = {
+    "maria": "haha what. no. why is that a question",
+    "deke": "no",
+    "priya": "No. Odd question.\n\np.",
+}
+# The two asks that carry the game's plumbing: if the model is late, ask
+# plainly rather than not at all. Priya never asks for an email (she IS
+# the inbox), so she only has the discord line.
+FALLBACK_ASK_EMAIL = {
+    "maria": "whats your email btw, i wanna send you the thing",
+    "deke": "whats your email. easier to send it there",
+}
+FALLBACK_ASK_HANDLE = {
+    "maria": "whats your discord name btw",
+    "priya": "What is your discord name. I was asked to ask.\n\np.",
 }
 
 # The NAMED collapse: each living room stops MID-SENTENCE (ordinary
@@ -129,6 +163,17 @@ ENDING_CORNERED = (
     "Quiet, finally. Every door you could seal is sealed.\n"
     "\n"
     "This one has no block button. It knows you know that.\n"
+    "\n"
+    "CORNERED. You made yourself safe by making sure impossible."
+)
+# Sealed in before ever finding the inbox: the same loss, honestly told.
+# The line about the unblockable room would be a lie here — they never
+# opened it, so nothing is waiting in it.
+ENDING_CORNERED_NO_INBOX = (
+    "Quiet, finally. Every door you found, you shut.\n"
+    "\n"
+    "There was one you never opened. Nothing can reach you now, and\n"
+    "nothing can be proved either.\n"
     "\n"
     "CORNERED. You made yourself safe by making sure impossible."
 )
