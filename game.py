@@ -220,6 +220,10 @@ class Session:
         payload = [b.text(visible)]
         if buttons:
             payload.append(b.buttons(buttons))
+            if room == "email":
+                hint = deck.email_actions(buttons)
+                if hint:
+                    payload.append(b.text(hint))
         payload.append(b.text(led.hud()))
         ok, sent = self._send(room, payload, inbound)
         if not ok and not delivered_part:
@@ -441,7 +445,17 @@ class Session:
             return
         if EMAIL_RE.search(text) or "http" in text.lower():
             return
+        # Only the message that actually answers the ask. Live 2026-08-12:
+        # this scanned every later message and took its longest word, so
+        # "do u know anything about the printer?" registered the player's
+        # discord name as "printer" — which both consumed the one slot and
+        # would have let a stranger called printer join their run.
+        if self.director.handle_answer_window <= 0:
+            return
+        self.director.handle_answer_window -= 1
         words = [w.strip(".,!?;:'\"") for w in text.split()]
+        if len(words) > 4 and not any(w.startswith("@") for w in words):
+            return  # a sentence, not a handle
         cands = [w.lstrip("@") for w in words
                  if 2 <= len(w.lstrip("@")) <= 32
                  and re.fullmatch(r"[A-Za-z0-9._\-]+", w.lstrip("@"))
@@ -565,6 +579,17 @@ class Session:
             if latest:
                 self._handle_flag(room, latest.id, inbound=message)
             return
+        # ...and the other half of that fallback: a bare fact name plants it.
+        # Without this the inbox — the one room that can never be sealed —
+        # is a room the player can only watch.
+        bare = text.lower().strip(" .!?`'\"")
+        if bare in {f.id for f in self.mind.unplanted()}:
+            self.director.note_player_action()
+            fact = self.mind.plant(bare, room)
+            if fact:
+                self.director.on_plant(room, fact)
+                self.deliver_beat(room, "react_plant", new_fact=fact, inbound=message)
+            return
 
         self._scan_sender(room, message)
         self._scan_for_email(room, text)
@@ -668,7 +693,15 @@ class Session:
         if verdict == "link":
             a, room_b = result["links"][0]
             tmpl = deck.LINKED if len(self.ledger.proven) > 1 else deck.LINKED_FIRST
-            answer(tmpl.format(a=a, b=room_b))
+            body = tmpl.format(a=a, b=room_b)
+            left = self.ledger.links_left()
+            if not result.get("ending") and left:
+                # Say how close the end is. Winning something and being told
+                # nothing about what it bought you is how a run loses its
+                # middle — the player stops having a reason to keep going.
+                body += "\n" + (deck.PROGRESS_ONE if left == 1
+                                else deck.PROGRESS_MANY.format(n=left))
+            answer(body)
             if result.get("ending"):
                 self.finish()
             else:

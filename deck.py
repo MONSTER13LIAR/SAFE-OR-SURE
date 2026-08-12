@@ -65,8 +65,8 @@ COLD_OPEN = {
 # provenance-tagged facts the moment a room sees them. This is the ammo a
 # player who never taps a plant button still gets hunted with.
 META_NAME_LABEL = "your name"
-META_NAME_TEXT = ('their name is "{v}". a name gets used, not mentioned — '
-                  "call them by it like you always have")
+META_NAME_TEXT = ('their name is "{v}". you know it and may use it, but '
+                  "sparingly, and never as the first word of a message")
 META_EMAIL_LABEL = "your email address"
 META_EMAIL_TEXT = "their email address is {v}"
 # The verbatim echo: the player's own typed words, in another mouth.
@@ -171,6 +171,11 @@ NAMED_CUT = {
 # ---------------------------------------------------------------- flag results
 LINKED = "⚑ LINKED — {a} and {b} are the same thing."
 LINKED_FIRST = "⚑ LINKED — {a} and {b} are the same thing.\nIt noticed you noticed."
+# Progress, stated in the only unit that matters. A player mid-run has no
+# way to feel how close the end is, and "am I getting anywhere" is the
+# question that decides whether they keep going.
+PROGRESS_ONE = "one more like that and it's over."
+PROGRESS_MANY = "{n} more links like that and it's over."
 FLAG_OLD_NEWS = "⚑ burned. You already proved that pair — it's the room you haven't linked yet that costs you."
 FLAG_NOISE = "⚑ burned. Nothing in that one came from another room.\nWait until somebody knows a thing you only told somebody else."
 # The first wrong flag is free, and says why — a player learns this verb by
@@ -246,6 +251,21 @@ ROOM_DOT_ALIVE = "◌"
 ROOM_DOT_SEALED = "✕"
 # Which dot is which app — a stranger should never have to memorize order.
 ROOM_TAGS = {"telegram": "tg", "discord": "dc", "email": "em"}
+
+
+def email_actions(buttons) -> str:
+    """Mail clients strip interactive buttons — every tap the inbox offers
+    is invisible there, so the same moves are spelled out as words to
+    reply with. The email room is act 3 and the only unblockable one; a
+    player must never be stuck watching it with no move available."""
+    parts = []
+    if any(b["value"].startswith("flag:") for b in buttons):
+        parts.append("reply `flag` to call this message out")
+    plants = [b["value"].split(":", 1)[1] for b in buttons
+              if b["value"].startswith("plant:")]
+    if plants:
+        parts.append("reply `" + "` or `".join(plants) + "` to tell her about it")
+    return "(no buttons in email — " + " · ".join(parts) + ")" if parts else ""
 
 
 def hud_line(dots: str, flags_left: int, alive: int) -> str:

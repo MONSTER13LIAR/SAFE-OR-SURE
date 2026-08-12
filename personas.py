@@ -89,7 +89,7 @@ def _build_prompt(persona, history, beat, own_facts, leak_facts, allowed_facts,
 
     if history:
         convo = "\n".join(
-            f"{'them' if h['who'] == 'them' else 'you'}: {h['text']}" for h in history[-12:]
+            f"{'them' if h['who'] == 'them' else 'you'}: {h['text']}" for h in history[-20:]
         )
         lines.append(f"RECENT CONVERSATION IN THIS ROOM:\n{convo}")
     else:

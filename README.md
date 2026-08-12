@@ -71,9 +71,10 @@ three people. Prove it.
    that's not a coincidence. That's evidence.
 3. **Flag it.** Tap `⚑ they both said that` on any message that uses
    something its sender couldn't know. (The button shows up once two rooms
-   are open — before that no message can be a link. If your mail app hides
-   buttons, reply with the single word `flag` to flag that sender's latest
-   message.) Right: you prove a link between two rooms — and somewhere
+   are open — before that no message can be a link. **Email has no buttons
+   at all** — mail clients strip them — so in your inbox you reply with the
+   word `flag`, or with a fact's name like `beagle` to tell Priya about it.
+   Every email from her spells out the moves you have.) Right: you prove a link between two rooms — and somewhere
    else, someone gets friendlier. Wrong: it's burned, and they start
    talking about you behind your back. You have **six flags**; the first
    wrong one is on the house, then two more mistakes are survivable and

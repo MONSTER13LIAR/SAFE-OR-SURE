@@ -100,6 +100,12 @@ class Ledger:
             comps = rest + [merged]
         return len(comps) == 1
 
+    def links_left(self) -> int:
+        """How many more links would finish the web. The player's only
+        sense of progress — without it the middle of a run is just chatting
+        with strangers and hoping."""
+        return max(0, len(self._components()) - 1)
+
     def linked_rooms(self, room: str) -> set:
         """Rooms connected to `room` by proven links (excl. itself)."""
         for c in self._components():

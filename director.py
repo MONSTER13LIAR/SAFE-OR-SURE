@@ -16,12 +16,17 @@ from ledger import ROOMS
 # RUN_PACE=demo tightens every timer for the ~4-minute judge window.
 DEMO_PACE = os.getenv("RUN_PACE", "").strip().lower() == "demo"
 
-LEAK_DELAY = (8, 15) if DEMO_PACE else (18, 40)   # plant -> echo elsewhere
-PITY_AFTER = 30 if DEMO_PACE else 60    # pity timer arms this far into the run
-PITY_GAP = 25 if DEMO_PACE else 50      # max seconds without a live leak on screen
-IDLE_AFTER = 60 if DEMO_PACE else 150   # player silence before a ping
+# Playtest 2026-08-12: the middle of a run was dead air. At the old default
+# a planted fact could sit unused for 40s and only every third reply could
+# carry a leak, so a player who did everything right still spent minutes
+# watching nothing happen. Density IS the motive — every timer below is
+# the answer to "why would they keep playing".
+LEAK_DELAY = (8, 15) if DEMO_PACE else (12, 25)   # plant -> echo elsewhere
+PITY_AFTER = 30 if DEMO_PACE else 45    # pity timer arms this far into the run
+PITY_GAP = 25 if DEMO_PACE else 40      # max seconds without a live leak on screen
+IDLE_AFTER = 60 if DEMO_PACE else 120   # player silence before a ping
 IDLE_PING_MAX = 2   # then the game goes dormant — never texts a gone player forever
-CHAT_LEAK_EVERY = 2 if DEMO_PACE else 3  # every Nth plain chat reply may leak
+CHAT_LEAK_EVERY = 2   # every Nth plain chat reply may leak
 QUIET_AFTER_FLAG = 30 if DEMO_PACE else 60  # flagged persona goes quiet, knowing
 ECHO_AFTER = 60 if DEMO_PACE else 120   # earliest the verbatim echo may fire
 # The "up late?" beat needs a wall clock, and a host box runs on UTC. Env
@@ -77,6 +82,10 @@ class Director:
         self.idle_pings = 0
         self.email_asks = 0
         self.handle_asks = 0
+        # How many of the player's next messages may be read as the answer
+        # to "whats your discord name". Outside that window their words are
+        # just words — see Session._scan_for_handle.
+        self.handle_answer_window = 0
         self.doors_dropped: set[str] = set()
         self.doors_nudged: set[str] = set()
         self.echo_done = False
@@ -187,6 +196,7 @@ class Director:
                 and self.handle_asks < len(HANDLE_ASK_AT)
                 and self.chat_count[room] >= HANDLE_ASK_AT[self.handle_asks]):
             self.handle_asks += 1
+            self.handle_answer_window = 2   # this reply, or the one after it
             return {"beat": "harvest_handle"}
         # Plants are the only move a player has before a second room opens.
         # Early on they come with every reply — the first run must never

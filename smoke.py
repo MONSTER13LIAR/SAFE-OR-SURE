@@ -146,8 +146,17 @@ check("three runs live now", len(hub.live()) == 3)
 print("\n4. the discord name a player hands over joins their own run")
 B.director.doors_dropped.add("discord")
 B.director.handle_asks = 1
+B.director.handle_answer_window = 2      # the ask just went out
 say("telegram", "tg-B", "im sana_k over there", {"name": "Sana", "id": "u-B"})
 check("B's handle was learned", "sana_k" in (B.expect.get("discord") or []))
+
+print("   a sentence later in the run is not a discord name")
+B.expect.pop("discord", None)
+B.director.handle_answer_window = 0
+say("telegram", "tg-B", "do u know anything about the printer?",
+    {"name": "Sana", "id": "u-B"})
+check("no handle was invented from ordinary chat", not B.expect.get("discord"))
+B.expect["discord"] = ["sana_k"]         # put it back for the rest of the run
 say("discord", "dc-B", "hi", {"name": "sana_k", "id": "u-B-dc"})
 check("B's discord lands in B's run", hub.by_conv["dc-B"] is B)
 check("still three runs", len(hub.live()) == 3)
@@ -317,6 +326,27 @@ N.director.maybe_drop_doors("telegram")
 time.sleep(0.2)
 check("once the asks are spent, the door is handed over",
       any(hub.game_email in str(t) for t in sent_to("tg-N")))
+
+# ------------------------------------------- 14. the inbox has no buttons
+# Reported live 2026-08-12: taps do nothing in email, because mail clients
+# strip interactive blocks. Email is act 3 and the room that can never be
+# sealed — a player must never be reduced to watching it.
+print("\n14. in email, words do what buttons do everywhere else")
+hint = G.deck.email_actions([{"value": "flag:t1"}, {"value": "plant:mangoes"}])
+check("the hint spells out both moves", "`flag`" in hint and "`mangoes`" in hint)
+
+say("email", "em-M", "hello", {"name": "Mail", "address": "mail@example.com"})
+M = hub.by_conv["em-M"]
+SENT.clear()
+say("email", "em-M", "beagle", {"name": "Mail", "address": "mail@example.com"})
+check("a bare fact name plants it", M.mind.get("beagle").origin == "email")
+check("and she reacts to being told", any("react_plant" in str(t) for t in sent_to("em-M")))
+
+M.ledger.opened["telegram"] = True      # two rooms up: buttons exist now
+SENT.clear()
+say("email", "em-M", "ok what else", {"name": "Mail", "address": "mail@example.com"})
+check("email messages carry the words for the taps",
+      any("no buttons in email" in str(t) for t in sent_to("em-M")))
 
 # ---------------------------------------------------------------- report
 bad = [label for label, ok in checks if not ok]
