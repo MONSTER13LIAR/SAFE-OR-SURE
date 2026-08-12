@@ -6,23 +6,34 @@ Three strangers are messaging you across your real apps — Telegram, Discord,
 your inbox. They don't know each other. Except one of them just used a fact
 you only ever told another one.
 
-Prove they're one thing. You have six flags.
+**The whole game in four lines:**
+
+> Three people message you on three different apps.
+> They are one thing.
+> Tell them things — each fact goes to one of them only.
+> When one knows something you told somebody else, tap `⚑`.
+
+Prove all three are one thing and you win. You have six flags, and the
+first wrong one is free.
 
 ## Play it — nothing to install
 
 There is nothing to download, clone, or configure. We host the game; you
 just message it from the apps already on your phone.
 
-1. **Tap [t.me/Maria_Chats_bot](https://t.me/Maria_Chats_bot)** on
-   Telegram and hit **start** (or just say hi). Maria texts you like she
-   already knows you. That's the entire setup.
-2. **When she asks for your email, give it to her.** Within a minute a
-   stranger named Priya emails you. Think for a second about how she got
-   your address.
-3. **When Maria drops a Discord invite, tap it and DM Deke** (open the
-   server, find Deke in the member list, message him). Three rooms,
-   three strangers — you're playing. The buttons under their messages
-   teach you the rest by touch.
+1. **Say hi to Maria on Telegram** —
+   [t.me/Maria_Chats_bot](https://t.me/Maria_Chats_bot), hit **start**.
+   The rules arrive in one message, then she texts you like she already
+   knows you. That's the entire setup.
+2. **Open the other two doors — this is the game.** One room on its own
+   can't leak anything, so nothing is catchable until a second stranger
+   is talking to you. Maria hands you both doors in the first minute:
+   tap her Discord invite and DM **Deke**, and when she asks for your
+   email, give it to her. Within a minute **Priya** emails you. Think for
+   a second about how she got your address.
+3. **Now play.** Tap `tell about the beagle`-style buttons to feed a fact
+   to one person, then watch the other two for it. `⚑ they both said
+   that` appears under their messages as soon as two rooms are open.
 
 No app, no account, no API key — it costs you (and us) nothing, because
 it runs on a free open model. (If nobody answers, the instance is between
@@ -59,12 +70,14 @@ three people. Prove it.
    two. If it ever comes back in a different app, wearing a different name —
    that's not a coincidence. That's evidence.
 3. **Flag it.** Tap `⚑ they both said that` on any message that uses
-   something its sender couldn't know. (If your mail app hides the
-   buttons, just reply with the single word `flag` — it flags that
-   sender's latest message.) Right: you prove a link between two rooms —
-   and somewhere else, someone gets friendlier. Wrong: it's burned, and
-   they start talking about you behind your back. You have **six flags**;
-   two mistakes are survivable, three end you.
+   something its sender couldn't know. (The button shows up once two rooms
+   are open — before that no message can be a link. If your mail app hides
+   buttons, reply with the single word `flag` to flag that sender's latest
+   message.) Right: you prove a link between two rooms — and somewhere
+   else, someone gets friendlier. Wrong: it's burned, and they start
+   talking about you behind your back. You have **six flags**; the first
+   wrong one is on the house, then two more mistakes are survivable and
+   the third ends you.
 4. **Block — if you dare.** The block button is real and it works. That
    voice never reaches you again… and every unproven link through that room
    burns with it. Sealing doors feels safe. Safe is how you lose. And your

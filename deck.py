@@ -24,6 +24,25 @@ FACTS = [
     ("pigeons", "the pigeons", "pigeons nest in your AC unit and wake you at six every morning"),
 ]
 
+# ---------------------------------------------------------------- the frame
+# The one piece of out-of-fiction text in the whole game, and it earns its
+# place: a stranger who taps a link with no idea what this is has no way to
+# infer the rules from the inside. Playtest 2026-08-12: without this, the
+# first tap is the flag button on message one, which cannot be right yet.
+# Sent once, in the room they walked in through, before anyone says hello.
+OPENING_CARD = (
+    "three people are about to message you\n"
+    "on three different apps.\n"
+    "\n"
+    "they are one thing.\n"
+    "\n"
+    "tell them things. when one of them knows\n"
+    "something you only told somebody else,\n"
+    "tap ⚑.\n"
+    "\n"
+    "you can be safe or you can be sure."
+)
+
 # ---------------------------------------------------------------- buttons
 FLAG_LABEL = "⚑ they both said that"
 DEFLECT_LABEL = "say nothing"
@@ -66,6 +85,13 @@ DOOR_DROP = {
                             "pass this on and now I have. {url}\n\np."),
     ("email", "discord"): ("Deke messaged you and got nothing back, apparently. "
                            "He is only ever on discord. {url}\n\np."),
+    # Last resort only. The inbox is meant to arrive by Priya finding YOU
+    # after you hand over the address — that beat is the whole thesis. But
+    # a player who never answers the ask would be left with a game they
+    # cannot win and no way to know why, so the door gets handed over.
+    ("telegram", "email"): ("priya says you never wrote back?? she does email. "
+                            "only email. like a boomer. {url}"),
+    ("discord", "email"): "priya only does email. thats the whole personality. {url}",
 }
 # The second, firmer drop — once, for a player who proved a link but still
 # hasn't opened a room they need to win.
@@ -145,8 +171,14 @@ NAMED_CUT = {
 # ---------------------------------------------------------------- flag results
 LINKED = "⚑ LINKED — {a} and {b} are the same thing."
 LINKED_FIRST = "⚑ LINKED — {a} and {b} are the same thing.\nIt noticed you noticed."
-FLAG_OLD_NEWS = "⚑ burned. You already proved that."
-FLAG_NOISE = "⚑ burned. That one actually was a coincidence."
+FLAG_OLD_NEWS = "⚑ burned. You already proved that pair — it's the room you haven't linked yet that costs you."
+FLAG_NOISE = "⚑ burned. Nothing in that one came from another room.\nWait until somebody knows a thing you only told somebody else."
+# The first wrong flag is free, and says why — a player learns this verb by
+# using it, and the first use is always a guess. Costing them a flag for
+# touching the only button on screen is how the game taught "don't play".
+FLAG_FREE = ("⚑ that one was just talk — nothing in it came from another room.\n"
+             "on the house, this once. flag one of them for knowing something\n"
+             "you only told somebody else.")
 FLAG_SPENT = "already flagged."
 DEFLECTED = "you keep it to yourself."
 

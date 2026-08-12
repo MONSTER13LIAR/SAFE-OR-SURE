@@ -38,12 +38,18 @@ def local_hour(now: float | None = None) -> int:
                 + LOCAL_UTC_OFFSET) % 24)
 
 
-EMAIL_ASK_AT = (2, 6)   # chat turns in a room before the 1st and 2nd email ask
-HANDLE_ASK_AT = (4, 9)  # ...and before asking which name to look for on discord
+# The asks come early on purpose: until a second room is open, no leak can
+# exist and no flag can be right, so a player alone in room one is holding
+# a game that has not started. Everything that opens a door is act zero.
+EMAIL_ASK_AT = (1, 4)   # chat turns in a room before the 1st and 2nd email ask
+HANDLE_ASK_AT = (3, 8)  # ...and before asking which name to look for on discord
 # Which door each room hands out, in the order it tries them. Whoever the
 # player found first becomes their guide into the rooms they haven't opened.
-DOORS_FROM = {"telegram": ("discord",),
-              "discord": ("telegram",),
+# "email" is the last resort in each list — the inbox is supposed to arrive
+# by Priya finding you after you hand over the address, and that beat is
+# the thesis; it is only handed over outright once the asks have failed.
+DOORS_FROM = {"telegram": ("discord", "email"),
+              "discord": ("telegram", "email"),
               "email": ("telegram", "discord")}
 
 # A phrase the player typed is echo-worthy if it's distinctive and safe to
@@ -182,7 +188,12 @@ class Director:
                 and self.chat_count[room] >= HANDLE_ASK_AT[self.handle_asks]):
             self.handle_asks += 1
             return {"beat": "harvest_handle"}
-        offer = self.chat_count[room] % 2 == 0 and bool(self.mind.unplanted())
+        # Plants are the only move a player has before a second room opens.
+        # Early on they come with every reply — the first run must never
+        # reach a turn where the screen offers nothing to do — and settle
+        # into every other turn once there's a game to play.
+        offer = bool(self.mind.unplanted()) and (
+            len(self.mind.planted()) < 3 or self.chat_count[room] % 2 == 0)
         return {"beat": "chat", "offer_plants": offer}
 
     def note_phrase(self, room: str, text: str):
@@ -204,13 +215,15 @@ class Director:
         can be the way in. Once each, warmed up, fixed copy."""
         if self.ledger.ending or not self.ledger.opened[room]:
             return
-        if self.chat_count[room] < 3 and self.run.player_email is None:
+        if self.chat_count[room] < 1 and self.run.player_email is None:
             return
         for target in DOORS_FROM.get(room, ()):
             if (target in self.doors_dropped or self.ledger.opened[target]
                     or not self.ledger.alive[target]
                     or not self.run.door_url(target)):
                 continue
+            if target == "email" and self.email_asks < len(EMAIL_ASK_AT):
+                continue  # let it ask first; the address is the fallback
             self.doors_dropped.add(target)
             self.run.send_door_drop(room, target)
             return

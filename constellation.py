@@ -142,8 +142,19 @@ PAGE = r"""<!doctype html>
   }
   .key.show { opacity: .8; }
 
+  /* the rules, in the four lines they actually are */
+  .rules {
+    max-width: 460px;
+    margin: 2.6vmin auto 0;
+    color: var(--dim);
+    font-size: clamp(.72rem, 1.9vmin, .82rem);
+    line-height: 1.7;
+    letter-spacing: .02em;
+  }
+  .rules b { color: var(--ink); font-weight: 500; }
+
   /* the doors */
-  .doors { margin-top: 2.8vmin; max-width: 460px; margin-left: auto; margin-right: auto; }
+  .doors { margin-top: 2.2vmin; max-width: 460px; margin-left: auto; margin-right: auto; }
   .door {
     display: flex;
     align-items: center;
@@ -223,6 +234,10 @@ PAGE = r"""<!doctype html>
   <div class="wall one" id="wall"></div>
 
   <p class="key" id="key">&#9676; open &nbsp;·&nbsp; &#9673; linked &nbsp;·&nbsp; &#10005; sealed</p>
+
+  <p class="rules">three people message you on three different apps.
+  <b>they are one thing.</b> tell them things &mdash; each fact goes to one of
+  them only. when one knows something you told somebody else, tap &#9873;.</p>
 
   <nav class="doors" id="doors" hidden>
     <div id="doorrows"></div>

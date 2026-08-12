@@ -36,6 +36,7 @@ def fake_turn(persona, history, beat, own_facts=(), leak_facts=(),
 
 personas.persona_turn = fake_turn
 
+import director as DIR  # noqa: E402
 import game as G  # noqa: E402
 
 G.COLD_OPEN_DELAY = (0.02, 0.03)
@@ -267,6 +268,55 @@ check("one entry per live run", len(snap["runs"]) == len(hub.live()))
 check("runs carry no message text",
       "beagle" not in str(snap) and "hey" not in str(snap))
 check("doors are offered", set(snap["doors"]) == {"telegram", "discord", "email"})
+
+# ------------------------------------------- 13. a first-timer's first minutes
+# Playtest 2026-08-12: a stranger said hi, planted one fact, and was then
+# shown exactly one button — the flag — on a message that could not
+# possibly be a link, because only one room was open. They burned a flag
+# and quit. Everything here is that run, made impossible.
+print("\n13. the first two minutes of a stranger's first run")
+SENT.clear()
+say("telegram", "tg-N", "hi", {"name": "New", "id": "u-N"})
+N = hub.by_conv["tg-N"]
+first = sent_to("tg-N")
+check("the rules arrive before anyone says hello",
+      first and first[0] == G.deck.OPENING_CARD)
+check("and only once", sum(1 for t in first if t == G.deck.OPENING_CARD) == 1)
+check("no flag button while one room is open",
+      not any("flag:" in str(t) for t in first))
+check("but something to do", any("plant:" in str(t) for t in first))
+
+say("telegram", "tg-N", "ok", {"name": "New", "id": "u-N"})
+check("the second door is handed over immediately",
+      "discord" in N.director.doors_dropped)
+
+N.expect["discord"] = ["newbie"]
+say("discord", "dc-N", "hi", {"name": "newbie", "id": "u-N-dc"})
+SENT.clear()
+say("telegram", "tg-N", "hello again", {"name": "New", "id": "u-N"})
+check("the flag button appears once a flag could be right",
+      any("flag:" in str(t) for t in sent_to("tg-N")))
+
+print("   the first wrong flag is free, and says why")
+t1 = N.ledger.record_turn("telegram", "just talk", [])
+check("free verdict", N.ledger.flag(t1.id)["verdict"] == "free")
+check("it cost nothing", N.ledger.flags_left == 6 and N.ledger.wrong == 0)
+t2 = N.ledger.record_turn("telegram", "still just talk", [])
+check("the second one costs", N.ledger.flag(t2.id)["verdict"] == "noise")
+check("and counts against them", N.ledger.flags_left == 5 and N.ledger.wrong == 1)
+
+print("   a player who never answers the email ask still gets the inbox")
+N.director.doors_dropped.add("discord")
+N.director.email_asks = 0
+N.director.maybe_drop_doors("telegram")
+check("the address is not handed out while it can still ask",
+      "email" not in N.director.doors_dropped)
+N.director.email_asks = len(DIR.EMAIL_ASK_AT)
+SENT.clear()
+N.director.maybe_drop_doors("telegram")
+time.sleep(0.2)
+check("once the asks are spent, the door is handed over",
+      any(hub.game_email in str(t) for t in sent_to("tg-N")))
 
 # ---------------------------------------------------------------- report
 bad = [label for label, ok in checks if not ok]

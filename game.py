@@ -192,7 +192,14 @@ class Session:
             rec = led.record_turn(room, turn.message, turn.facts_used)
             hist_entry = {"who": "you", "text": turn.message}
             self.history[room].append(hist_entry)
-        buttons = [{"label": deck.FLAG_LABEL, "value": f"flag:{rec.id}"}]
+        buttons = []
+        if sum(led.opened.values()) >= 2:
+            # No flag button until a flag could possibly be right. A link
+            # needs two rooms, so in room one the flag is a trap: it is the
+            # only thing on screen, and tapping it can only cost you. This
+            # hides the verb, never the answer — once two rooms are open it
+            # is back on every persona message, exactly as designed.
+            buttons.append({"label": deck.FLAG_LABEL, "value": f"flag:{rec.id}"})
         if offer_plants:
             pool = self.mind.unplanted()
             for fact in random.sample(pool, min(2, len(pool))):
@@ -210,7 +217,10 @@ class Session:
             visible = parts[-1]
         if self.epoch != epoch:
             return
-        payload = [b.text(visible), b.buttons(buttons), b.text(led.hud())]
+        payload = [b.text(visible)]
+        if buttons:
+            payload.append(b.buttons(buttons))
+        payload.append(b.text(led.hud()))
         ok, sent = self._send(room, payload, inbound)
         if not ok and not delivered_part:
             # Nothing reached the screen: forget the turn — and tell the
@@ -570,6 +580,12 @@ class Session:
                 # The clock starts at the first hello, not at boot — a game
                 # that sat idle for an hour must not log a 1:03:00 run.
                 self.ledger.started_at = time.time()
+                # ...and the only out-of-fiction words in the game, in the
+                # room they walked in through, before anyone says hello.
+                try:
+                    message.reply(text=deck.OPENING_CARD)
+                except Exception as e:
+                    print(f"!! opening card failed ({room}): {e}")
             self.ledger.opened[room] = True
             if room in self.cold_opened and decision["beat"] == "greet":
                 # It already said hello via the cold open — don't greet twice.
@@ -640,6 +656,12 @@ class Session:
         verdict = result["verdict"]
         if verdict == "spent":
             answer(deck.FLAG_SPENT)
+            return
+        if verdict == "free":
+            # The first wrong flag: cost nothing, and say what a real one
+            # looks like. No gaslight beat here — a player still learning
+            # the verb doesn't need three people worried about them yet.
+            answer(deck.FLAG_FREE)
             return
         if verdict == "over":
             return

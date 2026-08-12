@@ -40,6 +40,7 @@ class Ledger:
     proven: list[frozenset] = field(default_factory=list)
     flags_left: int = 6
     wrong: int = 0
+    forgiven: bool = False  # the first wrong flag is free, once per run
     ending: str | None = None  # NAMED / CORNERED / SWARMED
     _turn_counter: itertools.count = field(default_factory=lambda: _TURN_COUNTER, repr=False)
     started_at: float = field(default_factory=time.time)
@@ -141,6 +142,17 @@ class Ledger:
                 self.ending = "SWARMED"
             return {"verdict": "link", "links": [tuple(sorted(l)) for l in new_links],
                     "ending": self.ending}
+
+        if not old_links and not self.forgiven:
+            # First wrong flag of the run: free, and told why. The flag is
+            # the verb the game never explains, so the first use is always
+            # a guess — charging for it teaches "don't touch the button",
+            # which is the opposite of the lesson. Old news still costs:
+            # by then they've proved a link and know what they're doing.
+            self.forgiven = True
+            self.flags_left += 1
+            turn.flag_verdict = "free"
+            return {"verdict": "free", "ending": None}
 
         turn.flag_verdict = "old" if old_links else "noise"
         self.wrong += 1
