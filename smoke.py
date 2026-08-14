@@ -6,8 +6,8 @@ Two jobs, and it fails loudly on either:
   1. the promise the hosted game makes — several strangers can play one
      instance simultaneously and never touch each other's run;
   2. the promise the LADDER makes — ten levels that actually get harder,
-     a level 10 that genuinely cannot be won, and no way to climb it
-     without playing it.
+     a level 10 that is winnable and merciless rather than rigged, and no
+     way to climb any of it without playing it.
 
 Run:  .venv/bin/python smoke.py
 """
@@ -321,11 +321,14 @@ check("model-wait credit is capped, so the clock always runs out",
       stall_led.stall <= LV.get(6).clock() * 0.5)
 check("and a level with no clock reports none",
       G.Ledger(G.Mind(), level=LV.get(1)).time_left() is None)
-check("the last level does not leak", not LV.get(LV.TOP).leaks)
-check("every other level does", all(LV.get(n).leaks for n in range(1, LV.TOP)))
+check("every rung of the ladder leaks, including the last",
+      all(LV.get(n).leaks for n in range(1, LV.TOP + 1)))
+check("and the last one leaks most rarely",
+      LV.get(LV.TOP).leak_every >= LV.get(LV.TOP - 1).leak_every
+      and LV.get(LV.TOP).pity_gap >= LV.get(LV.TOP - 1).pity_gap)
 
 # ---------------------------------------------------------------- 9. level ten
-print("\n9. level 10 cannot be won, and cannot be won by accident either")
+print("\n9. level 10 can be won, and one mistake costs the whole climb")
 say("telegram", "tg-T", "hi", {"name": "Ten", "id": "u-T"})
 T = hub.by_conv["tg-T"]
 T.expect["discord"] = ["tenner"]
@@ -333,41 +336,64 @@ say("discord", "dc-T", "hi", {"name": "tenner", "id": "u-T-dc"})
 T._new_level(LV.TOP)
 T.ledger.opened.update({"telegram": True, "discord": True, "email": True})
 T.ledger.start_clock()
-check("the director will not hand out a leak", T.director._pick_leak() is None)
-T.director._delayed_leak()
-check("and the delayed leak is a no-op too", not T.ledger.live_leaks())
-before_facts = len(T.mind.facts)
-T.director.on_wrong_flag("telegram", "Maria")
-time.sleep(0.3)
-check("a wrong flag mints no evidence on level 10",
-      len(T.mind.facts) == before_facts)
-check("nothing on level 10 proves anything", not T.ledger.live_leaks())
+check("the top rung wants two links and gives exactly two flags",
+      T.level.links == 2 and T.level.flags == 2)
+check("so there is no margin on it at all",
+      T.ledger.flags_left == T.ledger.links_left())
+f1 = T.mind.unplanted()[0].id
+T.mind.plant(f1, "telegram")
+f2 = T.mind.unplanted()[0].id
+T.mind.plant(f2, "discord")
+check("and it does still hand out leaks", T.director._pick_leak() is not None)
 
-print("   flags on level 10 are free, and the answer is honest")
-# Level 10 talks about things the player really did tell somebody, on an
-# earlier level, in a Mind that no longer exists. Charging a flag for
-# checking — and answering "nothing in that one came from another room" —
-# would read as the game cheating on the most-watched rung.
-T.known.append("you burned rice twice this week in the new cooker")
-bait10 = T.director._pick_decoy()
-check("level 10 draws its bait from the whole climb",
-      bait10 in T.known or bait10 in [f.text for f in T.mind.unplanted()])
-flags10 = T.ledger.flags_left
-t10 = T.ledger.record_turn("discord", "[deke:decoy]", [])
-r10 = T.ledger.flag(t10.id)
-check("the verdict is clean, not noise", r10["verdict"] == "clean")
-check("it cost nothing", T.ledger.flags_left == flags10)
-check("and it did not end the run", T.ledger.ending is None)
-check("level 10 still hands out plant buttons",
-      T.director.on_player_message("discord", "hi").get("offer_plants") is not None)
-
-print("   the clock is the only ending it has")
-T.ledger.penalise(10_000)
-check("the clock reads empty", T.ledger.out_of_time())
+print("   two clean links name it, and that ends the climb")
+r1 = prove(T, "discord", f1)
+check("the first link scores", r1["verdict"] == "link" and r1["ending"] is None)
+check("and it cost one of the two flags", T.ledger.flags_left == 1)
+r2 = prove(T, "email", f2)
+check("the second link names level 10", r2["ending"] == "NAMED")
 SENT.clear()
-T.director.tick()
+T.resolve()
+time.sleep(5.0)
+check("naming the top rung ends the run instead of promoting to 11",
+      T.level_n == LV.TOP and T.ledger.ending == "NAMED")
+check("and it gets its own card, not the per-level one",
+      any(isinstance(t, str) and "NAMED IT AT TEN" in t for c, t in SENT))
+
+print("   one wrong flag at the top burns both flags and the run")
+say("telegram", "tg-W", "hi", {"name": "Wrong", "id": "u-W"})
+W = hub.by_conv["tg-W"]
+W._new_level(LV.TOP)
+W.ledger.opened.update({"telegram": True, "discord": True, "email": True})
+W.ledger.start_clock()
+tw = W.ledger.record_turn("discord", "[deke:decoy]", [])
+rw = W.ledger.flag(tw.id)
+check("there is no free first flag down here", rw["verdict"] == "noise")
+check("it costs both flags at once", W.ledger.flags_left <= 0)
+check("and the climb ends on the spot", rw["ending"] == "SWARMED")
+
+print("   its bait is still only ever cards it never dealt")
+say("telegram", "tg-D2", "hi", {"name": "Bait", "id": "u-D2"})
+D2 = hub.by_conv["tg-D2"]
+D2._new_level(LV.TOP)
+bait10 = D2.director._pick_decoy()
+check("nothing the player really said is ever used as bait",
+      bait10 is None or bait10 in [f.text for f in D2.mind.unplanted()])
+check("level 10 still hands out plant buttons",
+      D2.director.on_player_message("discord", "hi").get("offer_plants") is not None)
+
+print("   running the clock out at the top is TEN, not a win")
+say("telegram", "tg-T2", "hi", {"name": "Ten2", "id": "u-T2"})
+T2 = hub.by_conv["tg-T2"]
+T2._new_level(LV.TOP)
+T2.ledger.opened["telegram"] = True
+T2.ledger.start_clock()
+T2.ledger.penalise(10_000)
+check("the clock reads empty", T2.ledger.out_of_time())
+SENT.clear()
+T2.director.tick()
 time.sleep(1.0)
-check("running the clock out on level 10 is TEN", T.ledger.ending == "TEN")
+check("running the clock out on level 10 is TEN", T2.ledger.ending == "TEN")
 check("and it says so", any(isinstance(t, str) and "TEN." in t
                             for c, t in SENT))
 

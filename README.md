@@ -19,8 +19,9 @@ it's almost a favour. By level 5 it buries the slip mid-sentence and stops
 forgiving your mistakes. By level 8 you have two flags and two and a half
 minutes, and most of what sounds like a leak is bait.
 
-**Level 10 cannot be won.** On the last rung it doesn't slip — not once —
-and the only thing left to do is last. Getting there is the score.
+**Level 10 gives you nothing.** Two flags for two links, so being wrong
+once ends the climb — and when it finally slips, it puts the detail in
+somebody else's mouth. It can be won. Almost nobody wins it.
 
 ## Play it — nothing to install
 
@@ -113,13 +114,14 @@ level 5 the free first mistake is gone.
 | **3** | 5 | 2 links | 4:30 | paraphrasing |
 | **5** | 4 | 2 links | 3:30 | burying it mid-sentence |
 | **8** | 2 | 2 links | 2:30 | using a detail from *around* it |
-| **10** | 2 | 2 links | 1:50 | **it doesn't** |
+| **10** | 2 | 2 links | 1:50 | **putting it in someone else's mouth** |
 
 **Endings.** Prove the level's links and it stops mid-sentence, all of
-them at once — **NAMED IT**, and it comes back. Seal your way to safety
+them at once — **NAMED IT**, and it comes back. Do it on level 10 and the
+climb is over: **NAMED IT AT TEN**, the ceiling. Seal your way to safety
 until winning is impossible — **CORNERED**. Run out of flags — **SWARMED**.
-Run out of clock — **OUTRUN**. Outlast level 10, which never slips —
-**TEN**, the highest thing anybody gets. Whatever happens, the case file
+Run out of clock — **OUTRUN**. Reach level 10 and run the clock out without
+naming it — **TEN**, the second-best thing there is. Whatever happens, the case file
 lands in your email: how far you climbed, every leak you caught, missed or
 mis-flagged, and a `run it back` button.
 
@@ -160,9 +162,10 @@ told about a fact *the player has never given anyone* and asked to talk
 about its own version of it. The fact's id is never shown to the model, so
 it cannot appear in `facts_used`, so the Ledger scores a flag on it as
 noise by construction — not by judgement. Level 10 is the same mechanism
-turned all the way up: it spends the whole level knowing everything you
-gave away on the way up, and never once leaves a receipt for any of it.
-That is why it cannot be won.
+turned all the way up: almost every reply is bait, and the rare real slip
+arrives wearing somebody else's name — *a cousin, a neighbour, someone at
+work did the exact thing you told one person about.* The receipt is still
+there. You have two flags to find two of them, and no second chances.
 
 ## For developers only — run your own instance
 

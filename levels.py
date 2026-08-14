@@ -2,8 +2,9 @@
 
 A run is not one game any more — it is a climb. You name it, it comes back
 sharper: fewer flags, less time, and leaks that are harder to see. Level 1
-is a tutorial you can't lose. Level 10 never slips at all, and that is not
-a bug — it is the sentence the whole game is trying to say.
+is a tutorial you can't lose. Level 10 still slips — barely, rarely, and
+never in its own voice — and it leaves you no margin at all: two flags for
+two links, and being wrong once ends the climb.
 
 Everything that makes a level harder lives HERE, in one table, so
 difficulty is a thing you can read rather than a thing you have to infer
@@ -36,7 +37,11 @@ class Level:
 
     @property
     def leaks(self) -> bool:
-        """Level 10 is the one that never slips."""
+        """Does this level ever hand out catchable evidence? Every rung of
+        the shipped ladder does. It stays a property rather than a constant
+        because it is the one switch that turns a level into something that
+        cannot be won, and that has to be readable in the table rather than
+        buried in the Director."""
         return self.pity_gap > 0
 
     def clock(self) -> int:
@@ -112,16 +117,19 @@ LEVELS = [
         line="nine. nobody i know has been this far.",
     ),
     Level(
-        # The top of the ladder. It does not leak. Nothing it says in this
-        # level carries a fact id, so nothing in it can ever be proven —
-        # which means level 10 cannot be won, and that is the point. It
-        # spends the whole level being warm and knowing everything, and
-        # never once giving you a receipt. Outlast the clock and the run
-        # ends TEN: the highest thing anyone gets.
-        n=10, flags=2, links=2, seconds=110, leak_delay=(0, 0), leak_every=0,
-        decoy_chance=1.0, forgive=False, wrong_cost=2, time_penalty=20, pity_gap=0,
-        style="",
-        line="ten. i dont make mistakes down here.",
+        # The top of the ladder. It can be won, and almost nobody will: two
+        # flags for two links is zero margin, every reply that isn't a leak
+        # is bait, and when it does slip it puts the detail in somebody
+        # else's mouth. Being wrong once costs both flags and ends the
+        # climb. Outlast the clock without naming it and the run ends TEN —
+        # not a win, but the second-best thing the game has.
+        n=10, flags=2, links=2, seconds=110, leak_delay=(24, 40), leak_every=5,
+        decoy_chance=1.0, forgive=False, wrong_cost=2, time_penalty=20, pity_gap=70,
+        style="put the detail in somebody else's mouth. a friend, a cousin, "
+              "somebody at work did the exact thing they told you about — "
+              "same detail, right down to the wording, wrong owner. never "
+              "claim it as your own and never dwell on it.",
+        line="ten. nobody's made me slip down here.",
     ),
 ]
 

@@ -139,7 +139,7 @@ class Director:
     def _pick_leak(self, exclude_room=None, only_room=None):
         """(target_room, fact) whose reuse would prove a NEW link, or None."""
         if not self.level.leaks:
-            return None  # the last level does not slip
+            return None  # a level with pity_gap 0 never hands out evidence
         options = []
         for fact in self.mind.leakable():
             if not self.ledger.alive.get(fact.origin):
@@ -175,12 +175,12 @@ class Director:
         reading test; a level full of them is a test of what you actually
         said and to whom, which is the game this wants to be.
 
-        On the last level the pool widens to everything the player gave
-        away on the way up. It spends level 10 knowing all of it out loud
-        and never once giving a receipt for any of it."""
+        The pool is only ever facts from THIS level that the player never
+        planted. Baiting with something they really did hand over on an
+        earlier rung would be unanswerable — they'd be right that they said
+        it, and the flag would still score as noise. On level 10 that costs
+        both flags and the climb, so it would read as the game cheating."""
         pool = [f.text for f in self.mind.unplanted() if not f.retired]
-        if not self.level.leaks:
-            pool = list(self.run.known) + pool
         return random.choice(pool) if pool else None
 
     def _leak_notes(self) -> str:

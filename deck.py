@@ -334,18 +334,30 @@ ENDING_OUTRUN_CODA = (
     "It ran out the clock. It was never in a hurry — you were.\n"
     "OUTRUN on level {n}."
 )
-# The top of the ladder. Level 10 does not leak; there is nothing to
-# prove, and the only thing left to do is last. Reaching this is the
-# highest result the game has, and it is still a loss. That's the sentence.
+# The top of the ladder, survived but not named. Level 10 does slip —
+# rarely, and always in somebody else's name — so this is a loss with a
+# specific cause: you got there, and you were never sure enough in time.
 ENDING_TEN = (
     "It stops. Not caught — finished.\n"
     "\n"
     "◉\n"
     "\n"
-    "Ten levels. On the last one it never slipped, not once, and you\n"
-    "sat there and watched it not slip until the clock ran out.\n"
+    "Ten levels. On the last one it slipped in somebody else's name and\n"
+    "the clock went before you were sure it was yours.\n"
     "\n"
-    "TEN. Nobody names it at ten. Getting here is the score."
+    "TEN. You got to the top and it kept its receipts."
+)
+# Named at ten: the ceiling. Everything the ladder was built to make
+# almost impossible, done. Nothing in the game ranks above this.
+ENDING_NAMED_TOP = (
+    "It stops mid-sentence. All of them, at once.\n"
+    "\n"
+    "◉\n"
+    "\n"
+    "Ten levels. On the last one it put your own life in somebody else's\n"
+    "mouth, twice, and you still knew whose it was.\n"
+    "\n"
+    "YOU NAMED IT AT TEN. There is nothing above this."
 )
 AFTER_END = "The run is over. The case file went to whichever room you left open. Send `reset` to climb again."
 RESET_OK = "fresh. say hi somewhere."
@@ -365,12 +377,12 @@ CASE_FOOTER = "\nresult: {result} · flags used {used}/{budget} · rooms sealed 
 # with how far it got — that number is the score people compare.
 CASE_LADDER = "LEVEL {n} of 10 · cleared {cleared}"
 CASE_LEVEL_ROW = "  level {n} — named in {at}"
-# Level 10 has no CAUGHT and no MISSED lines, because there was nothing to
-# catch. Silence in the case file would read as a bug, so it says so.
-CASE_TEN = ("\nON LEVEL 10 IT DID NOT SLIP.\n"
-            "Not one message on that level used anything you told anyone else.\n"
-            "There was nothing to flag. That is what it looks like when it\n"
-            "stops making mistakes.")
+# Reaching ten without naming it. The MISSED lines above already say what
+# was on screen; this says why there were so few of them.
+CASE_TEN = ("\nYOU GOT TO LEVEL 10 AND DID NOT NAME IT.\n"
+            "It slips down here too — rarely, and never in its own name. Two\n"
+            "flags, two links, no room to be wrong about either. It didn't\n"
+            "beat you by being silent. It beat you by being patient.")
 CASE_PORTRAIT_HEADER = "WHAT IT KNEW\n============\ndoor by door, everything you gave away."
 CASE_PORTRAIT_ROOM = "{room} ({persona}) — {facts}"
 CASE_PORTRAIT_NONE = "{room} ({persona}) — nothing. you kept this door clean."

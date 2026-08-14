@@ -466,7 +466,7 @@ PAGE = r"""<!doctype html>
         : (lleft === 1 ? "1 link to go" : lleft + " links to go");
 
       if (ending === "NAMED") {
-        state.textContent = "NAMED IT";
+        state.textContent = (run.level >= 10) ? "NAMED IT AT TEN" : "NAMED IT";
         state.className = "tstate";
         if (!collapsed) collapse();
       } else if (ending === "TEN") {

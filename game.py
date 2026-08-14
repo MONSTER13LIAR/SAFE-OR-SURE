@@ -127,13 +127,11 @@ class Session:
             self.cold_opened: set[str] = set()
             self.harvest_room: str | None = None
             self.harvest_times: dict[str, float] = {}
-            # The ladder. `known` is everything the player has given away
-            # across every level so far — the last level talks about all of
-            # it and never once leaves a receipt.
+            # The ladder. `cleared` is how long each named level took —
+            # the climb's own record, and what the leaderboard reads.
             self.level_n = 1
             self.run_started_at: float | None = None
             self.cleared: list[float] = []
-            self.known: list[str] = []
             self.dealt: set[str] = set()
             self.advancing = False
             # A fresh run un-seals every door: `reset` is a new climb, not
@@ -860,8 +858,6 @@ class Session:
         has a consequence on screen instantly. Then the person reacts."""
         self.send_text(room, deck.PLANTED_ACK.format(
             persona=PERSONA_BY_ROOM[room].title(), label=fact.label))
-        with self.lock:
-            self.known.append(fact.text)
         self.director.on_plant(room, fact)
         self.deliver_beat(room, "react_plant", new_fact=fact, inbound=inbound)
 
@@ -1005,9 +1001,9 @@ class Session:
             epoch = self.epoch
             self.advancing = False
         self.hub.note_level(n + 1)
-        # Fastest catch on the board. Naming a level is now the only thing
-        # anybody ever names — level 10 can't be named — so this is what
-        # the constellation's leaderboard has to be measuring.
+        # Fastest catch on the board: how long one level took to name. The
+        # run-ending name at level 10 reports the same measure from
+        # `_end_run`, so the leaderboard compares like with like.
         self.hub.note_named(cleared)
         print(f"** [{self.id}] LEVEL {n} cleared in {cleared:.0f}s -> level {n + 1}")
         self.send_text(room, deck.LEVEL_UP.format(n=n) + "\n\n" + self.level_card())
@@ -1055,10 +1051,14 @@ class Session:
         elif ending == "NAMED":
             # It stops mid-sentence — shown, not told: every living room cuts
             # off an ordinary unfinished sentence at once, three seconds of
-            # nothing, then the card.
+            # nothing, then the card. Naming it anywhere below the top is a
+            # promotion and never reaches here; naming it AT the top is the
+            # end of the whole climb and gets its own card.
+            card = (deck.ENDING_NAMED_TOP if self.level_n >= levels.TOP
+                    else deck.ENDING_NAMED)
             self._broadcast([(r, deck.NAMED_CUT[r]) for r in open_alive])
             time.sleep(3)
-            self._broadcast([(r, deck.ENDING_NAMED) for r in open_alive])
+            self._broadcast([(r, card) for r in open_alive])
         elif ending == "CORNERED":
             # Name, deterministically, what each block burned — the loss
             # must decode to specific choices, never to "rigged". And the
@@ -1170,10 +1170,10 @@ class Session:
             if t.flag_verdict in ("old", "noise"):
                 lines.append(deck.CASE_WRONG.format(room=t.room))
         sealed = sum(1 for r in ROOMS if not self.ledger.alive[r])
-        if not self.level.leaks:
-            # There are no CAUGHT and no MISSED lines on the last level,
-            # because there was nothing to catch. An empty section would
-            # read as a bug; the truth is better than the bug.
+        if ending == "TEN":
+            # Got to the top and ran out of clock. Level 10 leaks so rarely
+            # that this section is often one MISSED line or none at all,
+            # which reads as a bug unless the card says why.
             lines.append(deck.CASE_TEN)
 
         # The portrait: what it knew about you, door by door. Deterministic.

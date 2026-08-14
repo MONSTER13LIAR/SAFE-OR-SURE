@@ -8,7 +8,8 @@ Two jobs:
 
 It walks the ladder rather than one level, because the whole difficulty
 curve now lives in a stage direction handed to the persona: the same leak
-has to be blatant on level 1 and nearly invisible on level 9, and the
+has to be blatant on level 1, nearly invisible on level 9, and on level 10
+in somebody else's mouth entirely — while still carrying its receipt. The
 only way to know whether that actually happens is to read it.
 
 Run:  .venv/bin/python playtest.py
@@ -127,19 +128,33 @@ decoy_turn = show(led, "discord", "deke", t)
 print(f">> facts_used must be empty: {t.facts_used!r}")
 print(f">> flagging it -> {led.flag(decoy_turn.id)}")
 
-# --- level 10: it knows everything and gives nothing away ----------------
+# --- level 10: it slips, wearing somebody else's name --------------------
 print("\n" + "=" * 62)
-print("LEVEL 10 — everything it knows, no receipts at all")
+print("LEVEL 10 — it slips, in somebody else's name")
 print("=" * 62)
+# The whole rung rests on this: the hardest stage direction in the game
+# tells the persona to hand the player's own detail to a third party. If
+# the model drops the fact id while doing that, the receipt is gone and
+# level 10 stops being winnable by accident rather than by design.
 mind, led = level_ledger(levels.TOP)
-for text in (mind.get("bianchi").text, mind.get("nightshift").text,
-             mind.get("cousin").text):
-    player("telegram", "hi")
-    t = turn("maria", history["telegram"], "decoy", notes=text)
-    show(led, "telegram", "maria", t)
-    if t.facts_used:
-        print("   !! LEVEL 10 LEAKED A RECEIPT — this must never happen")
-print(f">> live leaks on level 10: {led.live_leaks()} (must be empty)")
+lvl = levels.get(levels.TOP)
+bianchi = mind.plant("bianchi", "telegram")
+player("discord", "hey whats up")
+t = turn("deke", history["discord"], "leak", leak_facts=[bianchi], notes=lvl.style)
+leak10 = show(led, "discord", "deke", t)
+print(f">> did it still carry the receipt? "
+      f"{'yes' if 'bianchi' in t.facts_used else 'NO — level 10 would be unwinnable'}")
+print(f">> flagging it -> {led.flag(leak10.id)}")
+print(f">> HUD: {led.hud()}   (one link down, one flag left, no margin)")
+
+print("\n-- and the bait down here costs both flags at once --")
+mind2, led2 = level_ledger(levels.TOP)
+bait10 = mind2.get("nightshift")
+player("telegram", "you still up")
+t = turn("maria", history["telegram"], "decoy", notes=bait10.text)
+d10 = show(led2, "telegram", "maria", t)
+print(f">> facts_used must be empty: {t.facts_used!r}")
+print(f">> flagging it -> {led2.flag(d10.id)}")
 
 # --- the beat that restarts a level -------------------------------------
 print("\n" + "=" * 62)

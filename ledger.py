@@ -161,8 +161,10 @@ class Ledger:
                     possible += 1
         if possible < self.level.links:
             return False
-        # ...and you need a flag for every link you still owe. On the last
-        # level flags cost nothing, so this never bites there.
+        # ...and you need a flag for every link you still owe. On level 10
+        # that is exactly two for two, so this is the check that makes the
+        # top of the ladder unforgiving: one wasted flag and the level is
+        # arithmetically over the moment it happens.
         return not self.level.leaks or self.flags_left >= self.links_left()
 
     def links_left(self) -> int:
@@ -217,13 +219,11 @@ class Ledger:
                     "ending": self.ending}
 
         if not self.level.leaks:
-            # The last level never slips, so a flag on it is never wrong —
-            # it is the player checking, and being told no. Charging for
-            # that would be a lie and a trap: level 10 talks about things
-            # the player really did tell somebody (on an earlier level, in
-            # a Mind that no longer exists), so "nothing in that one came
-            # from another room" reads as the game cheating. Flags are free
-            # here, and the answer is honest.
+            # A level that never slips can never be flagged wrongly — it is
+            # the player checking, and being told no. Charging for that
+            # would be a trap rather than a difficulty. No shipped level is
+            # built this way any more; the switch stays because `pity_gap`
+            # is allowed to be zero and the rule has to hold if it ever is.
             turn.flag_verdict = "clean"
             return {"verdict": "clean", "ending": None}
 
