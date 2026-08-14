@@ -3,11 +3,20 @@ services:
     name: safe-or-sure
     runtime: python
     plan: free
-    buildCommand: pip install caspian-sdk
+    # PINNED ON PURPOSE. Unpinned, every redeploy pulled whatever was
+    # newest on PyPI — the hosted instance drifted to 0.6.4 while the
+    # local venv was still on 0.6.0, so the tests were not testing the
+    # thing that was serving. Between now and judging, a breaking SDK
+    # release must not be able to reach this service by itself.
+    buildCommand: pip install caspian-sdk==0.6.4
     startCommand: python game.py
     envVars:
       # No TZ here on purpose: a blueprint edit doesn't reach an already
       # running service, so the wall clock lives in code (GAME_UTC_OFFSET).
+      # Same reason the pin above had to be applied to the live service
+      # directly as well — this file alone would not have moved it.
+      # RUN_PACE is deliberately absent: it is a filming-only override, set
+      # by hand when recording and removed afterwards.
       - key: CASPIAN_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
