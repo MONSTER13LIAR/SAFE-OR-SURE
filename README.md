@@ -6,15 +6,21 @@ Three strangers are messaging you across your real apps — Telegram, Discord,
 your inbox. They don't know each other. Except one of them just used a fact
 you only ever told another one.
 
-**The whole game in four lines:**
+**The whole game in five lines:**
 
 > Three people message you on three different apps.
 > They are one thing.
 > Tell them things — each fact goes to one of them only.
 > When one knows something you told somebody else, tap `⚑`.
+> Catch it, and it comes back better at hiding.
 
-Prove all three are one thing and you win. You have six flags, and the
-first wrong one is free.
+Ten levels. Level 1 gives you six flags, no clock at all, and a leak so obvious
+it's almost a favour. By level 5 it buries the slip mid-sentence and stops
+forgiving your mistakes. By level 8 you have two flags and two and a half
+minutes, and most of what sounds like a leak is bait.
+
+**Level 10 cannot be won.** On the last rung it doesn't slip — not once —
+and the only thing left to do is last. Getting there is the score.
 
 ## Play it — nothing to install
 
@@ -23,17 +29,20 @@ just message it from the apps already on your phone.
 
 1. **Say hi to Maria on Telegram** —
    [t.me/Maria_Chats_bot](https://t.me/Maria_Chats_bot), hit **start**.
-   The rules arrive in one message, then she texts you like she already
-   knows you. That's the entire setup.
-2. **Open the other two doors — this is the game.** One room on its own
-   can't leak anything, so nothing is catchable until a second stranger
-   is talking to you. Maria hands you both doors in the first minute:
-   tap her Discord invite and DM **Deke**, and when she asks for your
-   email, give it to her. Within a minute **Priya** emails you. Think for
-   a second about how she got your address.
-3. **Now play.** Tap `tell about the beagle`-style buttons to feed a fact
-   to one person, then watch the other two for it. `⚑ they both said
-   that` appears under their messages as soon as two rooms are open.
+   The rules and your level-1 card arrive in two messages, then she texts
+   you like she already knows you. That's the entire setup.
+2. **Open a second door — that's the whole of level 1.** One room on its
+   own can't leak anything, so nothing is catchable until a second
+   stranger is talking to you. Maria hands you the door in the first
+   minute: tap her Discord invite, DM **Deke**, and say the three-character
+   word she gave you so he knows it's you. Within about ten seconds of
+   that, he knows something you only ever told her. That's the game.
+3. **Level 2 wants all three.** When she asks for your email, give it to
+   her — within a minute **Priya** emails you. Think for a second about
+   how she got your address.
+4. **Play.** Tap `tell about the beagle`-style buttons to feed a fact to
+   one person, then watch the other two for it. `⚑ they both said that`
+   appears under their messages as soon as two rooms are open.
 
 No app, no account, no API key — it costs you (and us) nothing, because
 it runs on a free open model. (If nobody answers, the instance is between
@@ -74,27 +83,45 @@ three people. Prove it.
    are open — before that no message can be a link. **Email has no buttons
    at all** — mail clients strip them — so in your inbox you reply with the
    word `flag`, or with a fact's name like `beagle` to tell Priya about it.
-   Every email from her spells out the moves you have.) Right: you prove a link between two rooms — and somewhere
-   else, someone gets friendlier. Wrong: it's burned, and they start
-   talking about you behind your back. You have **six flags**; the first
-   wrong one is on the house, then two more mistakes are survivable and
-   the third ends you.
+   Every email from her spells out the moves you have.) Right: you prove a
+   link between two rooms — and somewhere else, someone gets friendlier.
+   Wrong: it's burned, they start talking about you behind your back, and
+   from level 2 it costs you seconds as well. Your flag budget shrinks as
+   you climb — six on level 1, two by level 8 — and the free first mistake
+   is gone from level 5.
 4. **Block — if you dare.** The block button is real and it works. That
    voice never reaches you again… and every unproven link through that room
    burns with it. Sealing doors feels safe. Safe is how you lose. And your
    inbox has no block button.
 
 **The scoreboard** rides under every message:
-`tg◉ dc✕ em◌ · ⚑ 4 left · 2 rooms up` means Telegram is woven into your web
-(◉), Discord is sealed (✕), your inbox isn't linked yet (◌); four flags
-left; two rooms still alive.
+`L4 · tg◉ dc✕ em◌ · ⚑3 · 1 link · 2:14` means level 4; Telegram is woven
+into your web (◉), Discord is sealed (✕), your inbox isn't linked yet (◌);
+three flags left; one more link finishes the level; two minutes fourteen
+on the clock.
 
-**Endings:** weave all three rooms into one web and it stops mid-sentence —
-**NAMED IT**. Seal your way to safety until winning is impossible and you're
-alone in your inbox with it — **CORNERED**. Run out of flags and every room
-says the same sentence at once — **SWARMED**. Whatever happens, the case
-file lands in your email: every leak you caught, missed, or mis-flagged,
-and a `run it back` button.
+**Ten levels.** Naming it doesn't end the run — it promotes you. Fewer
+flags, less time, and a leak that goes from *almost a quote* to *a detail
+from around the fact, never the fact*. From level 3 it starts talking
+about things out of its own life that sound exactly like something you
+told somebody — most of what looks like a leak on level 8 is bait. From
+level 5 the free first mistake is gone.
+
+| | flags | to prove | clock | it leaks by |
+|---|---|---|---|---|
+| **1** | 6 | 1 link | none | saying it almost word for word |
+| **3** | 5 | 2 links | 4:30 | paraphrasing |
+| **5** | 4 | 2 links | 3:30 | burying it mid-sentence |
+| **8** | 2 | 2 links | 2:30 | using a detail from *around* it |
+| **10** | 2 | 2 links | 1:50 | **it doesn't** |
+
+**Endings.** Prove the level's links and it stops mid-sentence, all of
+them at once — **NAMED IT**, and it comes back. Seal your way to safety
+until winning is impossible — **CORNERED**. Run out of flags — **SWARMED**.
+Run out of clock — **OUTRUN**. Outlast level 10, which never slips —
+**TEN**, the highest thing anybody gets. Whatever happens, the case file
+lands in your email: how far you climbed, every leak you caught, missed or
+mis-flagged, and a `run it back` button.
 
 Send `reset` in any room to start over.
 
@@ -114,9 +141,28 @@ Personas      one LLM call per turn, structured output
               (free by default: Qwen3-30B via Featherless, ~3-4s/turn;
                claude-opus-5 takes over automatically if a key is set)
 The Director  who speaks next, where, and what it may leak
-The Ledger    links, flags, rooms, endings — deterministic
+The Ledger    links, flags, the level clock, endings — deterministic
+The Ladder    ten rows of numbers; the only place difficulty lives
 Caspian       one handler, all channels; the transport is the map
 ```
+
+**How the difficulty is actually implemented** (`levels.py`): every level
+is one frozen row — flag budget, links required, seconds, leak delay, leak
+density, decoy odds, what a mistake costs, and one sentence of stage
+direction that is handed straight to the persona (*"bury it in the middle
+of a sentence about something else"*). The Director and the Ledger hold no
+numbers of their own; they ask the level. So the thing that gets better at
+hiding is a table you can read, and the leak is still a real LLM call that
+returns a real receipt.
+
+**Decoys are provably fair.** When a level fakes a leak, the persona is
+told about a fact *the player has never given anyone* and asked to talk
+about its own version of it. The fact's id is never shown to the model, so
+it cannot appear in `facts_used`, so the Ledger scores a flag on it as
+noise by construction — not by judgement. Level 10 is the same mechanism
+turned all the way up: it spends the whole level knowing everything you
+gave away on the way up, and never once leaves a receipt for any of it.
+That is why it cannot be won.
 
 ## For developers only — run your own instance
 
@@ -158,12 +204,17 @@ Set `DISCORD_INVITE_URL` to a permanent invite for your bot's server and the
 rooms hand out each other's doors in conversation.
 
 **Many people can play one instance at once.** Each run is a separate
-Session with its own Mind, Ledger and Director; nothing crosses between
-them. A run belongs to whoever is in it, and a room joins that run only on
-evidence the player handed over themselves — the address they typed, the
-discord name they gave. `MAX_SESSIONS` (default 12) caps how many runs are
-live at once, and `MODEL_SLOTS` (default 4) caps how many persona calls are
-in flight, so a crowd queues instead of hitting the model's rate limit.
+Session with its own Mind, Ledger, Director and ladder position; nothing
+crosses between them. A run belongs to whoever is in it, and a room joins
+that run only on evidence the player handed over themselves — the address
+they typed, the discord name they gave, or the run's three-character code,
+which every handed-over door carries (*"say K7F to him or he wont know its
+you"*). Matching is exact: a stranger called `samantha` never lands in the
+run of a player who said `sam`. A room binds to one thread, once, so a
+player who also posts in a public channel never drags their private game
+into it. `MAX_SESSIONS` (default 12) caps how many runs are live at once,
+and `MODEL_SLOTS` (default 4) caps how many persona calls are in flight,
+so a crowd queues instead of hitting the model's rate limit.
 
 `RUN_PACE=demo` tightens every timer for a ~3–4 minute run (the default pace
 is a 5–6 minute game).
@@ -178,7 +229,18 @@ discovered from your bot token automatically; `TELEGRAM_BOT_URL` overrides it.
 
 It prints the three addresses. Message any of them from your phone.
 
-`playtest.py` runs the opening beats offline (no channels needed) if you
-just want to watch the personas talk. `smoke.py` drives the handler with
-fake channels and several players at once — it needs no keys and asserts
-the thing that matters most: no run can ever see another run's game.
+`playtest.py` walks the ladder offline with real persona calls and no
+channels — the same leak on levels 1, 5 and 9, a decoy, and level 10 — so
+you can read whether the difficulty curve actually reads as one.
+
+`smoke.py` drives the real handler with fake channels and a stubbed
+persona engine, no keys and no network. **93 checks**, and they cover the
+two promises this thing makes: several strangers play one instance and
+never touch each other's run, and the ladder cannot be climbed except by
+playing it — no free links from wrong flags, no re-tapping a spent offer,
+no dodging a losing level with `reset`, and a level 10 that provably never
+hands out a receipt.
+
+```sh
+.venv/bin/python smoke.py     # 93/93, ~40s, no keys needed
+```

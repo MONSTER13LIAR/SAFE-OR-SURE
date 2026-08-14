@@ -16,18 +16,42 @@ from caspian_sdk import CommClient
 from caspian_sdk import blocks as b
 
 import deck
+import levels
 import personas
-from director import DEMO_PACE, Director
+from director import Director
 from director import local_hour as director_local_hour
 from ledger import ROOMS, Ledger
+from levels import DEMO_PACE
 from mind import Mind
 
 PERSONA_BY_ROOM = {"telegram": "maria", "discord": "deke", "email": "priya"}
+# How many of the deck's facts a single level is played with. Small enough
+# to hold in your head — the game is asking you to remember what you told
+# whom, and a hand of twelve is a spreadsheet, not a memory.
+HAND_SIZE = 5
+# Every run gets a three-character name, and every door it hands out is
+# handed out with it. Discord can't tell us who a DM is from in terms the
+# game knows, so without this one human who opens two doors ends up
+# holding two separate games and can never win either. The middle
+# character is always a digit, so no English word can ever be mistaken for
+# a code in ordinary chat.
+CODE_LETTERS = "ACDEFHJKLMNPRTVWXY"
+CODE_DIGITS = "34679"
+CODE_RE = re.compile(r"\b([A-Za-z][0-9][A-Za-z])\b")
+# Channels where a new thread from the same person is ordinary and still
+# obviously the same person. Mail does that every time the subject
+# changes; a DM channel does not, so a second telegram/discord thread from
+# a known player is a group, not their game.
+REBINDABLE = {"email"}
+# A legacy discord discriminator is exactly four digits after a '#'.
+# Splitting on '#' unconditionally used to fold every `name#anything` onto
+# one key, which quietly merged two different people into one player.
+DISCRIMINATOR_RE = re.compile(r"#\d{4}$")
 # Seconds after sending to re-check delivery. A healthy send flips out of
 # `queued` in ~2s, so anything still queued at the end is a block. The tail
 # is long on purpose: under gateway load a slow send must not be mistaken
 # for a sealed room — a false seal can end someone's run outright.
-BLOCK_POLL_SECONDS = (3, 6, 10, 14, 20)
+BLOCK_POLL_SECONDS = (3, 6, 10, 14, 20, 27, 35)
 # Cold open: say hi to one stranger and the other two find you. Seconds
 # between the player's first hello and each unprompted first contact.
 COLD_OPEN_DELAY = (8, 15) if DEMO_PACE else (15, 30)
@@ -55,7 +79,7 @@ def norm_handle(v) -> str:
     """One shape for anything a channel calls a person, so a handle typed
     into a chat can be compared with the sender field of a later message."""
     h = str(v or "").strip().lower().lstrip("@")
-    h = h.split("#")[0]          # discord discriminators
+    h = DISCRIMINATOR_RE.sub("", h)   # legacy discord discriminators only
     return " ".join(h.split())
 
 
@@ -80,25 +104,77 @@ class Session:
         # only the first run of the process may use them. Every stranger's
         # run gets nothing but what they hand over themselves.
         self.player_email, self.player_discord = hub.claim_builder_handles()
+        self.code = hub.mint_code()
         self.restart()
 
     def restart(self):
-        """Run it back: a new game for the same person. Their conversations
-        and the handles they gave us survive; every scrap of the finished
-        run does not."""
+        """Run it back: a new climb for the same person, from level 1.
+        Their conversations and the handles they gave us survive; every
+        scrap of the finished run does not — including the ladder, so a
+        losing level can never be dodged by typing `reset`."""
         with self.lock:
             self.epoch += 1
             self.ended_at: float | None = None
             self.run_duration: float | None = None
-            self.mind = Mind()
-            self.ledger = Ledger(self.mind)
-            self.director = Director(self)
             self.history: dict[str, list[dict]] = {r: [] for r in ROOMS}
             self.ended_notified = False
             self.cold_open_started = False
             self.cold_opened: set[str] = set()
             self.harvest_room: str | None = None
             self.harvest_times: dict[str, float] = {}
+            # The ladder. `known` is everything the player has given away
+            # across every level so far — the last level talks about all of
+            # it and never once leaves a receipt.
+            self.level_n = 1
+            self.cleared: list[float] = []
+            self.known: list[str] = []
+            self.dealt: set[str] = set()
+            self.advancing = False
+            # A fresh run un-seals every door: `reset` is a new climb, not
+            # a continuation, so nothing survives it except the threads.
+            self._new_level(1, keep_rooms=False)
+
+    def _deal(self) -> list:
+        """A fresh hand for a level. Cards already dealt this run come back
+        only once the deck is exhausted, so a player five levels up is not
+        hunting the same beagle they hunted in level one."""
+        pool = [f for f in deck.FACTS if f[0] not in self.dealt]
+        if len(pool) < HAND_SIZE:
+            self.dealt.clear()
+            pool = list(deck.FACTS)
+        hand = random.sample(pool, min(HAND_SIZE, len(pool)))
+        self.dealt.update(f[0] for f in hand)
+        return hand
+
+    def _new_level(self, n: int, keep_rooms=True):
+        """Build the level. Rooms and their state carry over (a door you
+        sealed stays sealed — that's the cost of feeling safe); the Mind,
+        the Ledger and the Director are new."""
+        alive = dict(self.ledger.alive) if keep_rooms and hasattr(self, "ledger") else None
+        opened = dict(self.ledger.opened) if keep_rooms and hasattr(self, "ledger") else None
+        self.level_n = n
+        # A level boundary is a hard line: everything still in flight
+        # belongs to the level that just ended. Without the bump, a reply
+        # generated on level 3 lands on level 4 carrying level 3's
+        # scoreboard, and gets recorded in a Ledger nobody is reading.
+        self.epoch += 1
+        # Fresh per-room locks. They used to be built once and held across
+        # the whole model call, so a slow call from a run the player had
+        # already reset would make the new run's first message wait behind
+        # it — up to a minute and a half of silence right after a reset.
+        # The old thread still holds the old lock and still drops its
+        # output on the epoch check; it just no longer blocks anybody.
+        self.room_locks = {r: threading.Lock() for r in ROOMS}
+        self.mind = Mind(hand=self._deal())
+        self.ledger = Ledger(self.mind, level=levels.get(n))
+        if alive:
+            self.ledger.alive.update(alive)
+            self.ledger.opened.update(opened)
+        self.director = Director(self)
+
+    @property
+    def level(self):
+        return self.ledger.level
 
     # Shared plumbing lives on the hub; a session only ever reads it.
     @property
@@ -142,6 +218,7 @@ class Session:
         own = [f for f in self.mind.planted(room)
                if f is not new_fact and not f.verbatim]
         turn = None
+        began = time.time()
         for attempt in (1, 2):
             try:
                 # One queue for every session's calls: a crowd must never
@@ -157,6 +234,12 @@ class Session:
                 print(f"!! persona call failed ({room}/{beat}, try {attempt}): {e}")
                 if attempt == 1:
                     time.sleep(2)
+        if inbound is not None:
+            # The player asked something and had to wait for a model to
+            # answer. That wait is not theirs to pay for: the level clock
+            # gets it back, or a slow evening on a free endpoint becomes
+            # the difficulty instead of the game being the difficulty.
+            led.add_stall(time.time() - began)
         if turn is None:
             # Model down twice. Silence during a run reads as a broken game —
             # load-bearing beats fall back to fixed lines; the rest skip.
@@ -202,10 +285,15 @@ class Session:
             buttons.append({"label": deck.FLAG_LABEL, "value": f"flag:{rec.id}"})
         if offer_plants:
             pool = self.mind.unplanted()
+            # The turn id rides in the value. An offer belongs to the
+            # message it arrived on and dies when the next one lands —
+            # no channel lets us take a button back, so the button stays
+            # on screen and the game refuses it instead of silently
+            # eating the tap.
             for fact in random.sample(pool, min(2, len(pool))):
                 buttons.append({"label": deck.PLANT_PREFIX + fact.label,
-                                "value": f"plant:{fact.id}"})
-            buttons.append({"label": deck.DEFLECT_LABEL, "value": "deflect"})
+                                "value": f"plant:{rec.id}:{fact.id}"})
+            buttons.append({"label": deck.DEFLECT_LABEL, "value": f"deflect:{rec.id}"})
         visible = turn.message
         delivered_part = False
         if parts and len(parts) > 1:
@@ -262,6 +350,8 @@ class Session:
         # falls back — its whole job is to carry the fact — so the Director
         # re-arms it instead (on_send_failed).
         table = {"chat": deck.FALLBACK_CHAT,
+                 "resume": deck.FALLBACK_CHAT,
+                 "decoy": deck.FALLBACK_CHAT,
                  "react_plant": deck.FALLBACK_CHAT,
                  "deny": deck.FALLBACK_DENY,
                  "harvest_email": deck.FALLBACK_ASK_EMAIL,
@@ -316,6 +406,9 @@ class Session:
                 status = next((m.get("status") for m in msgs if m.get("id") == message_id), None)
                 if status not in ("queued", "pending"):
                     return  # delivered (or unknowable) — room is open
+            if self.epoch != epoch:
+                return  # a reset landed inside the last poll: never seal a
+                        # fresh run's room on the evidence of a dead one
             self._room_sealed(room)
 
         threading.Thread(target=watch, daemon=True).start()
@@ -327,7 +420,7 @@ class Session:
             result = self.ledger.block(room)
         print(f"** room sealed: {room}")
         if result.get("ending"):
-            self.finish()
+            self.resolve()
         else:
             self.director.on_block(room, PERSONA_BY_ROOM[room].title())
 
@@ -481,7 +574,7 @@ class Session:
         line = table.get((from_room, target))
         if not url or not line or not self.conversations.get(from_room):
             return
-        line = line.format(url=url)
+        line = line.format(url=url, code=self.code)
         epoch = self.epoch
 
         def run():
@@ -554,7 +647,9 @@ class Session:
                     except Exception as e:
                         print(f"!! dm nudge failed ({room}): {e}")
             return
-        self.conversations[room] = message.conversation_id
+        # The room's thread was bound by the router, once. Nothing here
+        # repoints it — that is how a private run used to get dragged into
+        # whatever channel the player happened to post in last.
         text = (message.text or "").strip()
         print(f"<- [{self.id}/{room}] {text!r}")
 
@@ -576,19 +671,24 @@ class Session:
             return
         if text.lower() in ("flag", "⚑"):  # text fallback (email has no buttons everywhere)
             latest = self.ledger.latest_turn(room)
-            if latest:
+            if latest and sum(self.ledger.opened.values()) >= 2:
                 self._handle_flag(room, latest.id, inbound=message)
+            else:
+                # Same gate the button has: before a second room is open no
+                # message can be a link, so flagging can only cost. Silence
+                # here would be the worst answer — the email room prints
+                # "reply `flag`" in every message it sends.
+                message.reply(text=deck.FLAG_TOO_EARLY)
             return
         # ...and the other half of that fallback: a bare fact name plants it.
         # Without this the inbox — the one room that can never be sealed —
         # is a room the player can only watch.
         bare = text.lower().strip(" .!?`'\"")
-        if bare in {f.id for f in self.mind.unplanted()}:
-            self.director.note_player_action()
+        if bare in {f.id for f in self.mind.unplanted()} and self.ledger.opened[room]:
+            self.director.note_player_action(room)
             fact = self.mind.plant(bare, room)
             if fact:
-                self.director.on_plant(room, fact)
-                self.deliver_beat(room, "react_plant", new_fact=fact, inbound=message)
+                self.plant_and_react(room, fact, inbound=message)
             return
 
         self._scan_sender(room, message)
@@ -599,23 +699,33 @@ class Session:
         decision = self.director.on_player_message(room, text)
         if decision["beat"] is None:
             return  # flagged persona stays quiet, knowing
-        first_contact = not self.ledger.opened[room]
+        with self.lock:
+            first_contact = not self.ledger.opened[room]
+            # Two rooms opening at the same instant used to each think they
+            # were first, so the opening card could ship twice and the
+            # clock could start twice.
+            first_ever = first_contact and not any(self.ledger.opened.values())
+            if first_contact:
+                self.ledger.opened[room] = True
         if first_contact:
-            if not any(self.ledger.opened.values()):
+            if first_ever:
                 # The clock starts at the first hello, not at boot — a game
                 # that sat idle for an hour must not log a 1:03:00 run.
-                self.ledger.started_at = time.time()
+                self.ledger.start_clock()
                 # ...and the only out-of-fiction words in the game, in the
                 # room they walked in through, before anyone says hello.
                 try:
                     message.reply(text=deck.OPENING_CARD)
+                    message.reply(text=self.level_card())
                 except Exception as e:
                     print(f"!! opening card failed ({room}): {e}")
-            self.ledger.opened[room] = True
             if room in self.cold_opened and decision["beat"] == "greet":
                 # It already said hello via the cold open — don't greet twice.
                 decision = {"beat": "chat", "offer_plants": True}
             self.maybe_cold_open(room)
+            # A second door just opened, which is the moment this stops
+            # being three people being friendly. Guarantee the hook.
+            self.director.on_room_opened(room)
         self.deliver_beat(room, decision["beat"],
                           leak_facts=decision.get("leak_facts", ()),
                           offer_plants=decision.get("offer_plants", False),
@@ -652,19 +762,65 @@ class Session:
             return
         print(f"<- [{self.id}/{room}] tap {value!r}")
 
-        if value == "deflect":
-            self.send_text(room, deck.DEFLECTED)
-        elif value.startswith("plant:"):
-            fact = self.mind.plant(value.split(":", 1)[1], room)
-            if fact:
-                self.director.on_plant(room, fact)
-                self.deliver_beat(room, "react_plant", new_fact=fact)
+        if value.startswith(("plant:", "deflect")):
+            self._handle_offer(room, value)
         elif value.startswith("flag:"):
             self._handle_flag(room, value.split(":", 1)[1])
 
+    def _handle_offer(self, room, value):
+        """A plant or a deflect. Two things have to be true at once and
+        neither was before: the tap has to land NOW (the persona's reaction
+        is a live model call and can take seconds — a button that flashes
+        and then does nothing for ten seconds reads as broken), and the
+        offer has to be gone afterwards. No channel lets us pull a button
+        off a sent message, so the offer is scoped to the turn it rode in
+        on and the game says plainly when it has passed."""
+        parts = value.split(":")
+        turn_id = parts[1] if len(parts) > 1 else None
+        # Decide under the lock, talk outside it: send_text is a network
+        # call and nothing else in this run should wait behind it.
+        with self.lock:
+            turn = self.ledger.turns.get(turn_id) if turn_id else None
+            latest = self.ledger.latest_turn(room)
+            if turn is None or latest is None or turn.id != latest.id:
+                refuse = deck.BUTTON_STALE
+            elif turn.offer_spent:
+                refuse = deck.BUTTON_SPENT
+            else:
+                refuse = None
+                turn.offer_spent = True
+        if refuse:
+            self.send_text(room, refuse)
+            return
+        if parts[0] == "deflect":
+            self.send_text(room, deck.DEFLECTED)
+            return
+        fact = self.mind.plant(parts[2], room) if len(parts) > 2 else None
+        if fact is None:
+            self.send_text(room, deck.BUTTON_SPENT)
+            return
+        self.plant_and_react(room, fact)
+
+    def plant_and_react(self, room, fact, inbound=None):
+        """The receipt goes out before the model is even called, so the tap
+        has a consequence on screen instantly. Then the person reacts."""
+        self.send_text(room, deck.PLANTED_ACK.format(
+            persona=PERSONA_BY_ROOM[room].title(), label=fact.label))
+        with self.lock:
+            self.known.append(fact.text)
+        self.director.on_plant(room, fact)
+        self.deliver_beat(room, "react_plant", new_fact=fact, inbound=inbound)
+
     def _handle_flag(self, room, turn_id, inbound=None):
         with self.lock:
+            known = turn_id in self.ledger.turns
             result = self.ledger.flag(turn_id)
+        if not known:
+            # A flag button from a level or a run that no longer exists.
+            # Turn ids are unique for the life of the process, so this can
+            # never hit a live turn by accident — it just needs saying.
+            self.send_text(room, deck.BUTTON_STALE)
+            return
 
         def answer(text):
             # Must never raise: on the run-ending flag, an exception here
@@ -703,30 +859,120 @@ class Session:
                                 else deck.PROGRESS_MANY.format(n=left))
             answer(body)
             if result.get("ending"):
-                self.finish()
+                self.resolve()
             else:
                 self.director.on_correct_flag(room)
         else:  # old / noise — a wrong flag either way
             answer(deck.FLAG_OLD_NEWS if verdict == "old" else deck.FLAG_NOISE)
             if result.get("ending"):
-                self.finish()
+                self.resolve()
             else:
                 self.director.on_wrong_flag(room, PERSONA_BY_ROOM[room].title())
 
-    # ------------------------------------------------------------ endings
-    def finish(self):
+    # ------------------------------------------------------------ the ladder
+    def level_card(self) -> str:
+        lvl = self.level
+        clock = (f"{lvl.clock() // 60}:{lvl.clock() % 60:02d}" if lvl.seconds
+                 else "no clock")
+        tmpl = deck.LEVEL_ONE_CARD if lvl.n == 1 else deck.LEVEL_CARD
+        return tmpl.format(n=lvl.n, line=lvl.line, flags=lvl.flags,
+                           links=("1 link" if lvl.links == 1 else f"{lvl.links} links"),
+                           clock=clock)
+
+    def open_alive(self) -> list[str]:
+        return [r for r in ROOMS if self.ledger.opened[r] and self.ledger.alive[r]]
+
+    def resolve(self):
+        """An ending landed. Everything after it — the collapse, the three
+        seconds of nothing, the case file, a whole LLM call — happens off
+        the caller's thread, because the caller is very often the SDK's
+        polling thread and a run ending must never make the process deaf
+        to everybody else's game."""
+        threading.Thread(target=self._resolve, daemon=True).start()
+
+    def _resolve(self):
         with self.lock:
-            if self.ended_notified or not self.ledger.ending:
-                return
-            self.ended_notified = True
             ending = self.ledger.ending
-            self.ended_at = time.time()
-            self.run_duration = self.ended_at - self.ledger.started_at
+            if not ending or self.advancing or self.ended_notified:
+                return
+            promote = ending == "NAMED" and self.level_n < levels.TOP
+            if promote:
+                self.advancing = True
+            else:
+                self.ended_notified = True
+                self.ended_at = time.time()
+                self.run_duration = self.ended_at - self.ledger.started_at
+        try:
+            if promote:
+                self._level_up()
+            else:
+                self._end_run(ending)
+        except Exception as e:
+            print(f"!! resolve failed ({self.id}/{ending}): {e}")
+            self.advancing = False
+
+    def _level_up(self):
+        """Naming it does not end the run — it promotes you. The rooms cut
+        out mid-sentence exactly as they always did, and then, a couple of
+        seconds later, the same three people start again, harder."""
+        epoch = self.epoch
+        n = self.level_n
+        cleared = time.time() - self.ledger.started_at
+        room = self.director.last_room
+        if room not in self.open_alive():
+            room = (self.open_alive() or ["telegram"])[0]
+        self._broadcast([(r, deck.NAMED_CUT[r]) for r in self.open_alive()])
+        time.sleep(2.5)
+        if self.epoch != epoch:
+            return
+        with self.lock:
+            if self.epoch != epoch:
+                return
+            self.cleared.append(cleared)
+            self._new_level(n + 1)     # bumps the epoch: level N is over
+            epoch = self.epoch
+            self.advancing = False
+        self.hub.note_level(n + 1)
+        print(f"** [{self.id}] LEVEL {n} cleared in {cleared:.0f}s -> level {n + 1}")
+        self.send_text(room, deck.LEVEL_UP.format(n=n) + "\n\n" + self.level_card())
+        time.sleep(1.5)
+        if self.epoch != epoch:
+            return
+        self.send_text(room, self.level.line)
+        with self.lock:
+            self.history[room].append({"who": "you", "text": self.level.line})
+            self.ledger.start_clock()
+        # Something to tap. A level that opens with no plant buttons is a
+        # level where the player's only available move is the flag.
+        self.deliver_beat(room, "resume", offer_plants=True)
+
+    # ------------------------------------------------------------ endings
+    def on_time_up(self):
+        """The level clock hit zero."""
+        with self.lock:
+            if self.ledger.ending or self.advancing:
+                return
+            ending = self.ledger.time_up()
+        if ending:
+            self.resolve()
+
+    def send_clock_warning(self, room, left, mark):
+        if room not in self.open_alive():
+            room = (self.open_alive() or [room])[0]
+        line = (deck.CLOCK_LAST if mark <= 20 else deck.CLOCK_WARN).format(left=max(0, left))
+        self.send_text(room, line)
+
+    def _end_run(self, ending):
         if ending == "NAMED":
             self.hub.note_named(self.run_duration)
-        print(f"** [{self.id}] ENDING: {ending}")
-        open_alive = [r for r in ROOMS if self.ledger.opened[r] and self.ledger.alive[r]]
-        if ending == "NAMED":
+        print(f"** [{self.id}] ENDING: {ending} on level {self.level_n}")
+        open_alive = self.open_alive()
+        if ending == "TEN":
+            self._broadcast([(r, deck.ENDING_TEN) for r in open_alive])
+        elif ending == "OUTRUN":
+            self._broadcast([(r, deck.ENDING_OUTRUN) for r in open_alive])
+            self._say_ending(deck.ENDING_OUTRUN_CODA.format(n=self.level_n))
+        elif ending == "NAMED":
             # It stops mid-sentence — shown, not told: every living room cuts
             # off an ordinary unfinished sentence at once, three seconds of
             # nothing, then the card.
@@ -753,18 +999,23 @@ class Session:
         elif ending == "SWARMED":
             # The same sentence, every room, one buzz.
             self._broadcast([(r, deck.ENDING_SWARMED) for r in open_alive])
-            self._say_ending(deck.ENDING_SWARMED_CODA)
+            self._say_ending(deck.ENDING_SWARMED_CODA.format(n=self.level_n))
         self._send_case_file(ending)
 
     def _reachable_rooms(self) -> list[str]:
         """Where the player can still be reached, inbox first — that's the
         room with no block button, and act 3 belongs to it. A run that
         never opened email must still get its ending: silence at the end
-        of a game reads as broken, not as an ending."""
-        rooms = [r for r in ROOMS
-                 if self.conversations.get(r) and self.ledger.alive[r]]
-        rooms.sort(key=lambda r: r != "email")
-        return rooms
+        of a game reads as broken, not as an ending.
+
+        Sealed rooms come last rather than not at all. A seal is inferred
+        from a send that stayed queued, which under gateway load is
+        sometimes wrong — and a player who never actually blocked anyone
+        would otherwise watch their run end in total silence."""
+        live = [r for r in ROOMS if self.conversations.get(r) and self.ledger.alive[r]]
+        live.sort(key=lambda r: r != "email")
+        dead = [r for r in ROOMS if self.conversations.get(r) and not self.ledger.alive[r]]
+        return live + dead
 
     def _say_ending(self, body) -> bool:
         for room in self._reachable_rooms():
@@ -787,8 +1038,10 @@ class Session:
             with self.hub.model_slots:
                 turn = personas.persona_turn(
                     "priya", self.history["email"], "casefile",
-                    notes=(f"the run ended: {ending}. they used "
-                           f"{6 - self.ledger.flags_left} of 6 flags and sealed "
+                    notes=(f"the run ended: {ending}, on level {self.level_n} "
+                           f"of 10. they cleared {len(self.cleared)} levels, used "
+                           f"{max(0, self.level.flags - self.ledger.flags_left)} of "
+                           f"{self.level.flags} flags on this one and sealed "
                            f"{sealed} rooms."),
                 )
             note = turn.message.strip()
@@ -806,6 +1059,13 @@ class Session:
 
     def _send_case_file(self, ending):
         lines = [deck.CASE_HEADER]
+        # The ladder first: how far it got is the number people compare,
+        # and every rung below it is a time somebody beat this thing.
+        lines.append(deck.CASE_LADDER.format(n=self.level_n, cleared=len(self.cleared)))
+        for i, secs in enumerate(self.cleared, start=1):
+            lines.append(deck.CASE_LEVEL_ROW.format(
+                n=i, at=f"{int(secs) // 60}:{int(secs) % 60:02d}"))
+        lines.append("")
         if self.harvest_room and "gave" in self.harvest_times and "used" in self.harvest_times:
             lines.append(deck.CASE_HARVEST.format(
                 gave=self._mmss(self.harvest_times["gave"]),
@@ -822,6 +1082,11 @@ class Session:
             if t.flag_verdict in ("old", "noise"):
                 lines.append(deck.CASE_WRONG.format(room=t.room))
         sealed = sum(1 for r in ROOMS if not self.ledger.alive[r])
+        if not self.level.leaks:
+            # There are no CAUGHT and no MISSED lines on the last level,
+            # because there was nothing to catch. An empty section would
+            # read as a bug; the truth is better than the bug.
+            lines.append(deck.CASE_TEN)
 
         # The portrait: what it knew about you, door by door. Deterministic.
         lines.append("")
@@ -835,16 +1100,19 @@ class Session:
                 if facts else
                 deck.CASE_PORTRAIT_NONE.format(room=r, persona=persona))
 
-        used = 6 - self.ledger.flags_left
+        budget = self.level.flags
+        used = max(0, budget - self.ledger.flags_left)
         # Winning gets a time on the card — the speedrun hook. Losses don't;
         # nobody brags about how fast they got cornered.
         result = ending
         if ending == "NAMED" and self.ended_at:
             result = f"{ending} in {self._mmss(self.ended_at)}"
-        lines.append(deck.CASE_FOOTER.format(result=result, used=used, sealed=sealed))
-        dots = self.ledger.hud().split(" · ")[0]
+        lines.append(deck.CASE_FOOTER.format(result=result, used=used,
+                                             budget=budget, sealed=sealed))
+        dots = self.ledger.hud().split(" · ")[1]
         lines.append("")
-        lines.append(deck.SHARE_CARD.format(result=result, used=used, dots=dots))
+        lines.append(deck.SHARE_CARD.format(n=self.level_n, result=result, used=used,
+                                            budget=budget, dots=dots))
 
         if note := self._case_cover_note(ending, sealed):
             lines.insert(0, note + "\n")
@@ -916,6 +1184,11 @@ class Session:
                 "in_run": in_run,
                 "id": self.id,
                 "active_at": self.director.last_player_action,
+                # The ladder, live. `left` counts DOWN — the page is where
+                # a spectator feels the pressure the player is under.
+                "level": self.level_n,
+                "links_left": led.links_left(),
+                "left": led.time_left() if in_run else None,
             }
 
 
@@ -933,6 +1206,7 @@ class Game:
         self.game_email: str | None = None        # our own address, never harvested
         self.telegram_url = os.getenv("TELEGRAM_BOT_URL") or None
         self.best_named: list[float] = []   # fastest NAMED times this boot
+        self.best_level = 0                 # highest rung anyone reached this boot
         self.sessions: list[Session] = []
         self.by_conv: dict[str, Session] = {}          # conversation -> run
         self.by_key: dict[tuple[str, str], Session] = {}  # (room, person) -> run
@@ -963,6 +1237,23 @@ class Game:
         with self.lock:
             self.best_named = sorted(self.best_named + [seconds])[:5]
 
+    def note_level(self, n: int):
+        with self.lock:
+            self.best_level = max(self.best_level, n)
+
+    def mint_code(self) -> str:
+        """A short name for a run, unique among the ones alive. Middle
+        character is always a digit so nothing anyone types in ordinary
+        conversation can be mistaken for one."""
+        with self.lock:
+            taken = {s.code for s in self.live()}
+            for _ in range(200):
+                code = (random.choice(CODE_LETTERS) + random.choice(CODE_DIGITS)
+                        + random.choice(CODE_LETTERS))
+                if code not in taken:
+                    return code
+            return "X0X"
+
     def live(self) -> list[Session]:
         return [s for s in self.sessions if not s.dead]
 
@@ -977,57 +1268,123 @@ class Game:
                                             s.get("address"), s.get("id")) if v}
         return key, {h for h in handles if h}
 
+    def _by_code(self, room, text) -> Session | None:
+        """Every run has a three-character name, and every door it hands
+        out is handed out with it: `tell him K7F or he wont know its you`.
+
+        Without this, one human who opens two doors is two separate runs
+        that can never be joined — Discord will not tell us who a DM is
+        from in any term the game already knows, and the handle ask only
+        works if they answer it. The code is the player saying, in their
+        own words, that these two conversations are one person."""
+        m = CODE_RE.search(text or "")
+        if not m:
+            return None
+        want = m.group(1).upper()
+        found = [s for s in self.live()
+                 if s.code == want and room not in s.conversations]
+        return found[0] if len(found) == 1 else None
+
     def _claim(self, room, key, handles) -> Session | None:
         """Is a run waiting for exactly this person in this room? Only ever
         on evidence the player handed over themselves — the address they
         typed, the handle they gave. Two possible runs means we don't know,
-        and a wrong guess would drop someone inside a stranger's game."""
+        and a wrong guess would drop someone inside a stranger's game.
+
+        Exact matches only. A substring rule used to live here and it was
+        a real hazard: a player who answered "sam" made every stranger
+        called `samantha` a match, and a player whose address was
+        `priyanka@…` matched anyone displaying as `priya`. Landing a
+        stranger inside somebody's run is the one failure worse than
+        making them start their own."""
         found = []
         for s in self.live():
             if room in s.conversations:
                 continue  # that room already has its person
-            wants = list(s.expect.get(room) or [])
+            wants = set(s.expect.get(room) or [])
             if room == "email" and s.player_email:
-                wants.append(norm_handle(s.player_email))
+                wants.add(norm_handle(s.player_email))
             if room == "discord" and s.player_discord:
-                wants.append(norm_handle(s.player_discord))
-            for want in filter(None, wants):
-                if want == key or want in handles or any(
-                        len(h) >= 4 and (h in want or want in h) for h in handles):
-                    found.append(s)
-                    break
+                wants.add(norm_handle(s.player_discord))
+            if any(w and (w == key or w in handles) for w in wants):
+                found.append(s)
         return found[0] if len(found) == 1 else None
 
     def route(self, room, message) -> Session | None:
         """The run this message belongs to, or None when the game is full."""
         conv = message.conversation_id
         key, handles = self._identity(message)
+        text = getattr(message, "text", "") or ""
         with self.lock:
-            s = self.by_conv.get(conv) or self.by_key.get((room, key))
+            s = self.by_conv.get(conv)
+            if s is None:
+                # The key map only ever answers for the thread that key
+                # actually owns. Somebody who spoke once in a shared
+                # channel is registered nowhere, so their own DM later
+                # starts their own game instead of vanishing into the run
+                # they happened to stand next to.
+                cand = self.by_key.get((room, key))
+                if cand is not None and (cand.conversations.get(room) == conv
+                                         or room in REBINDABLE):
+                    s = cand
             if s is not None and s.dead:
                 s = None
             if s is None:
-                s = self._claim(room, key, handles)
+                s = self._by_code(room, text) or self._claim(room, key, handles)
                 if s is not None:
-                    print(f"** [{s.id}] {room} joined by handle")
+                    print(f"** [{s.id}] {room} joined this run")
             if s is None:
                 if len(self.live()) >= MAX_SESSIONS:
                     return None
                 self._sid += 1
                 s = Session(self, f"r{self._sid}")
                 self.sessions.append(s)
-                print(f"** new run {s.id} — entered through {room} "
+                print(f"** new run {s.id} ({s.code}) — entered through {room} "
                       f"({len(self.live())} live)")
-            s.conversations[room] = conv
-            s.keys.setdefault(room, key)   # the first voice in a room owns it
-            self.by_conv[conv] = s
-            self.by_key[(room, key)] = s
+            # A room binds to exactly one thread, once. Repointing it at
+            # whatever conversation spoke last is how a private run ends up
+            # being played out loud: the same person posting once in a
+            # public channel used to drag their whole game — leaks, name,
+            # address, case file — into it.
+            if room not in s.conversations:
+                s.conversations[room] = conv
+                s.keys[room] = key        # the first voice in a room owns it
+                self.by_conv[conv] = s
+                self.by_key[(room, key)] = s
+            elif (room in REBINDABLE and s.keys.get(room) == key
+                  and s.conversations[room] != conv):
+                # A fresh mail thread from the same person — mail is the
+                # one channel where a new subject is a new conversation
+                # and still obviously the same human. Follow it; the old
+                # thread keeps routing here too.
+                s.conversations[room] = conv
+                self.by_conv[conv] = s
             s.last_seen = time.time()
             return s
 
     def on_message(self, message):
         room = self.conn_to_room.get(message.connection_id)
         if room is None:
+            return
+        conv = message.conversation_id
+        key, _ = self._identity(message)
+        with self.lock:
+            owner = self.by_key.get((room, key))
+            in_public = (owner is not None and not owner.dead
+                         and room not in REBINDABLE
+                         and owner.conversations.get(room) not in (None, conv))
+        if in_public:
+            # The same person, talking in a second thread on a channel
+            # where the real conversation is a DM: a group, a server
+            # channel. Following them there would play their private game
+            # out loud in front of whoever else is in the room.
+            print(f"<- [{room}] {key!r} spoke outside their own thread")
+            if key not in owner.told_to_dm:
+                owner.told_to_dm.add(key)
+                try:
+                    message.reply(text=deck.NOT_IN_PUBLIC[PERSONA_BY_ROOM[room]])
+                except Exception as e:
+                    print(f"!! dm nudge failed ({room}): {e}")
             return
         session = self.route(room, message)
         if session is None:
@@ -1045,6 +1402,10 @@ class Game:
         if room is None:
             return
         conv = interaction.conversation_id
+        tapper = getattr(interaction, "sender", None) or {}
+        who = norm_handle(tapper.get("address") or tapper.get("username")
+                          or tapper.get("id") or "")
+        revived = False
         with self.lock:
             session = self.by_conv.get(conv)
             if session is not None and session.dead:
@@ -1054,26 +1415,33 @@ class Game:
                 # swept. The button is the whole replay loop — it must
                 # never be a tap into silence, so it opens a new run in
                 # the thread it was tapped from.
-                if len(self.live()) >= MAX_SESSIONS:
-                    session = None
-                else:
+                if len(self.live()) < MAX_SESSIONS:
                     self._sid += 1
                     session = Session(self, f"r{self._sid}")
                     self.sessions.append(session)
                     session.conversations[room] = conv
+                    # Claim the room for whoever tapped, exactly as an
+                    # inbound message would. Without this the new run has
+                    # no owner, and every "is this the player?" guard in
+                    # the game is inert until somebody types something.
+                    if who:
+                        session.keys[room] = who
+                        self.by_key[(room, who)] = session
                     self.by_conv[conv] = session
-                    print(f"** new run {session.id} — [run it back] in {room}")
-                    try:
-                        self.client.send_message(conv, text=deck.RESET_OK)
-                    except Exception as e:
-                        print(f"!! reset ack failed ({room}): {e}")
-                    return
+                    revived = True
+        if revived:
+            # Outside the hub lock on purpose: this is a network call on
+            # the SDK's polling thread, and holding the hub lock across it
+            # freezes routing for every other player in the house.
+            print(f"** new run {session.id} ({session.code}) — [run it back] in {room}")
+            try:
+                self.client.send_message(conv, text=deck.RESET_OK)
+            except Exception as e:
+                print(f"!! reset ack failed ({room}): {e}")
+            return
         if session is None:
             print(f"<- [{room}] tap from an unknown thread ignored")
             return
-        tapper = getattr(interaction, "sender", None) or {}
-        who = norm_handle(tapper.get("address") or tapper.get("username")
-                          or tapper.get("id") or "")
         owner = session.keys.get(room)
         if who and owner and who != owner:
             print(f"<- [{room}] tap from a bystander in a shared thread ignored")
@@ -1143,6 +1511,8 @@ class Game:
                        "alive": True, "opened": False, "linked": False}
                       for r in ROOMS],
             "best_named": [int(t) for t in self.best_named],
+            "best_level": self.best_level,
+            "top_level": levels.TOP,
             "doors": self.doors(),
             # Which commit is actually serving. Without it there is no way
             # to tell a deployed fix from a fix that quietly didn't ship.

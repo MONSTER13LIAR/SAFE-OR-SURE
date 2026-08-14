@@ -1,24 +1,47 @@
 """Offline playtest: real persona generation, no Caspian, no phone.
 
-Simulates the opening two minutes of a run and scores two flags through
-the Ledger. Two jobs:
-  1. smoke-test the whole engine (structured output, provenance, verdicts)
-  2. produce a 15-second transcript for the anti-slop playtest gate —
-     if a stranger reads this and says "that's a bot", the voice cards fail.
+Two jobs:
+  1. smoke-test the live half of the engine — structured output,
+     provenance receipts, the Ledger's verdicts;
+  2. produce a transcript for the anti-slop gate. If a stranger reads
+     this and says "that's a bot", the voice cards failed, not the model.
+
+It walks the ladder rather than one level, because the whole difficulty
+curve now lives in a stage direction handed to the persona: the same leak
+has to be blatant on level 1 and nearly invisible on level 9, and the
+only way to know whether that actually happens is to read it.
 
 Run:  .venv/bin/python playtest.py
 """
 
+import time
+
+import levels
 import personas
 from ledger import Ledger
 from mind import Mind
 
-mind = Mind()
-led = Ledger(mind)
 history = {"telegram": [], "discord": [], "email": []}
 
+_raw_turn = personas.persona_turn
 
-def show(room, persona, turn):
+
+def turn(*a, **kw):
+    """The free endpoint drops a TLS handshake now and then. The game
+    retries; so does this, or one flaky connection eats the transcript."""
+    for attempt in (1, 2, 3):
+        try:
+            return _raw_turn(*a, **kw)
+        except Exception as e:
+            print(f"   (retry {attempt}: {type(e).__name__})")
+            time.sleep(2)
+    raise SystemExit("persona endpoint unreachable — try again later")
+
+
+personas.persona_turn = turn
+
+
+def show(led, room, persona, turn):
     print(f"\n[{room}] {persona}: {turn.message}")
     if turn.facts_used:
         print(f"         (facts_used={turn.facts_used})")
@@ -31,48 +54,96 @@ def player(room, text):
     history[room].append({"who": "them", "text": text})
 
 
-# --- act 1: telegram opens, a fact gets planted --------------------------
-led.opened["telegram"] = True
+def level_ledger(n):
+    mind = Mind()
+    led = Ledger(mind, level=levels.get(n))
+    for r in led.opened:
+        led.opened[r] = True
+    return mind, led
+
+
+# --- level 1: it barely tries to hide ------------------------------------
+print("=" * 62)
+print("LEVEL 1 — it says the thing almost exactly as you said it")
+print("=" * 62)
+mind, led = level_ledger(1)
+lvl = levels.get(1)
+
 player("telegram", "hey? who is this")
-t = personas.persona_turn("maria", history["telegram"], "greet")
-show("telegram", "maria", t)
+show(led, "telegram", "maria", turn("maria", history["telegram"], "greet"))
 
-player("telegram", "uh ok. day's been a mess honestly")
+player("telegram", "uh ok. days been a mess honestly")
 beagle = mind.plant("beagle", "telegram")
-t = personas.persona_turn("maria", history["telegram"], "react_plant", new_fact=beagle)
-show("telegram", "maria", t)
+show(led, "telegram", "maria",
+     turn("maria", history["telegram"], "react_plant", new_fact=beagle))
 
-# --- discord opens, and the beagle comes back wearing a different name ---
-led.opened["discord"] = True
 player("discord", "hello?")
-t = personas.persona_turn("deke", history["discord"], "greet")
-show("discord", "deke", t)
+show(led, "discord", "deke", turn("deke", history["discord"], "greet"))
 
 player("discord", "do i know you")
-t = personas.persona_turn("deke", history["discord"], "leak",
-                          leak_facts=[beagle])
-leak_turn = show("discord", "deke", t)
+t = turn("deke", history["discord"], "leak",
+                          leak_facts=[beagle], notes=lvl.style)
+leak_turn = show(led, "discord", "deke", t)
 
-# --- the player flags it: provenance check, in code ----------------------
 result = led.flag(leak_turn.id)
-print(f"\n>> FLAG on deke's message -> {result}")
+print(f"\n>> FLAG -> {result}")
 print(f">> HUD: {led.hud()}")
+print(f">> one link names level 1: ending={led.ending}")
 
-# --- a wrong flag, and the gaslight that follows -------------------------
-player("discord", "and whats with the weather lately")
-t = personas.persona_turn("deke", history["discord"], "chat")
-chat_turn = show("discord", "deke", t)
-result = led.flag(chat_turn.id)
-print(f"\n>> FLAG on innocent message -> {result}")
+# --- level 5: the same fact, buried --------------------------------------
+print("\n" + "=" * 62)
+print("LEVEL 5 — the same leak, buried mid-sentence")
+print("=" * 62)
+mind, led = level_ledger(5)
+lvl = levels.get(5)
+rice = mind.plant("rice", "telegram")
+player("discord", "whats going on with you")
+t = turn("deke", history["discord"], "leak",
+                          leak_facts=[rice], notes=lvl.style)
+show(led, "discord", "deke", t)
+print(f">> did it still carry the receipt? {'yes' if 'rice' in t.facts_used else 'NO — the leak was lost'}")
 
-led.opened["email"] = True
-acc = mind.add_accusation("discord", "they accused Deke of copying someone")
-t = personas.persona_turn("priya", history["email"], "gaslight",
-                          leak_facts=[acc],
-                          notes="they accused Deke, in another app, of saying things a stranger shouldn't know")
-gas_turn = show("email", "priya", t)
+# --- level 9: said and waved off in the same breath ----------------------
+print("\n" + "=" * 62)
+print("LEVEL 9 — said, then waved off like a guess")
+print("=" * 62)
+mind, led = level_ledger(9)
+lvl = levels.get(9)
+mangoes = mind.plant("mangoes", "telegram")
+player("email", "anything new")
+t = turn("priya", history["email"], "leak",
+                          leak_facts=[mangoes], notes=lvl.style)
+show(led, "email", "priya", t)
+print(f">> did it still carry the receipt? {'yes' if 'mangoes' in t.facts_used else 'NO — the leak was lost'}")
 
-result = led.flag(gas_turn.id)
-print(f"\n>> FLAG on the gaslight ('we talked' is itself a leak) -> {result}")
-print(f">> HUD: {led.hud()}")
-print(f">> ending: {led.ending}  (NAMED needs all three rooms in one web)")
+# --- the decoy: looks like a leak, provably isn't ------------------------
+print("\n" + "=" * 62)
+print("THE DECOY — flag-bait that is not evidence")
+print("=" * 62)
+bait = mind.get("printer")
+player("discord", "you around")
+t = turn("deke", history["discord"], "decoy", notes=bait.text)
+decoy_turn = show(led, "discord", "deke", t)
+print(f">> facts_used must be empty: {t.facts_used!r}")
+print(f">> flagging it -> {led.flag(decoy_turn.id)}")
+
+# --- level 10: it knows everything and gives nothing away ----------------
+print("\n" + "=" * 62)
+print("LEVEL 10 — everything it knows, no receipts at all")
+print("=" * 62)
+mind, led = level_ledger(levels.TOP)
+for text in (mind.get("bianchi").text, mind.get("nightshift").text,
+             mind.get("cousin").text):
+    player("telegram", "hi")
+    t = turn("maria", history["telegram"], "decoy", notes=text)
+    show(led, "telegram", "maria", t)
+    if t.facts_used:
+        print("   !! LEVEL 10 LEAKED A RECEIPT — this must never happen")
+print(f">> live leaks on level 10: {led.live_leaks()} (must be empty)")
+
+# --- the beat that restarts a level -------------------------------------
+print("\n" + "=" * 62)
+print("RESUME — it comes back as if nothing happened")
+print("=" * 62)
+show(led, "telegram", "maria",
+     turn("maria", history["telegram"], "resume"))

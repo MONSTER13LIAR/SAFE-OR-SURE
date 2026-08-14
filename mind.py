@@ -26,11 +26,17 @@ class Fact:
 
 @dataclass
 class Mind:
+    """`hand` is the subset of deck.FACTS this level is played with. Every
+    level deals a fresh one, so a player climbing the ladder is never
+    hunting the same beagle twice — and the cards they didn't play are the
+    decoy pool the level draws its flag-bait from."""
+
+    hand: list = field(default_factory=lambda: list(deck.FACTS))
     facts: dict[str, Fact] = field(default_factory=dict)
     _acc_counter: itertools.count = field(default_factory=itertools.count, repr=False)
 
     def __post_init__(self):
-        for fid, label, text in deck.FACTS:
+        for fid, label, text in self.hand:
             self.facts[fid] = Fact(id=fid, label=label, text=text)
 
     def plant(self, fact_id: str, room: str) -> Fact | None:

@@ -15,9 +15,9 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SAFE OR SURE</title>
-<meta name="description" content="Three strangers message you across Telegram, Discord and your inbox. They are one thing. Prove it — you have six flags.">
+<meta name="description" content="Three strangers message you across Telegram, Discord and your inbox. They are one thing. Prove it — ten levels, and it gets better at hiding every time you do.">
 <meta property="og:title" content="SAFE OR SURE">
-<meta property="og:description" content="Three strangers, three apps, one thing. Prove it before you seal yourself in.">
+<meta property="og:description" content="Three strangers, three apps, one thing. Catch it and it comes back better at hiding. Nobody names it at ten.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='9' fill='%23e8a13a'/%3E%3C/svg%3E">
 <style>
@@ -122,6 +122,8 @@ PAGE = r"""<!doctype html>
   .many .strip { gap: 1em; font-size: .68rem; letter-spacing: .04em; white-space: nowrap; }
   .many .strip .rooms { display: none; }
   .strip .flag { color: var(--accent); }
+  .strip .lvl { color: var(--ink); letter-spacing: .12em; }
+  .strip .low { color: var(--accent); }
   .tstate {
     margin-top: 1.6vmin;
     min-height: 1.5em;
@@ -237,7 +239,9 @@ PAGE = r"""<!doctype html>
 
   <p class="rules">three people message you on three different apps.
   <b>they are one thing.</b> tell them things &mdash; each fact goes to one of
-  them only. when one knows something you told somebody else, tap &#9873;.</p>
+  them only. when one knows something you told somebody else, tap &#9873;.
+  <b>ten levels:</b> every time you catch it, it comes back better at hiding.
+  nobody names it at ten.</p>
 
   <nav class="doors" id="doors" hidden>
     <div id="doorrows"></div>
@@ -293,6 +297,7 @@ PAGE = r"""<!doctype html>
     root.appendChild(svg);
 
     var strip = el("div", "strip");
+    var lvl = el("span", "lvl"); lvl.textContent = "—";
     var clock = el("span"); clock.textContent = "—";
     var flagWrap = el("span");
     var flagMark = el("span", "flag"); flagMark.textContent = "⚑";
@@ -301,7 +306,8 @@ PAGE = r"""<!doctype html>
     flagWrap.appendChild(document.createTextNode(" "));
     flagWrap.appendChild(flags);
     var up = el("span", "rooms"); up.textContent = "—";
-    strip.appendChild(clock); strip.appendChild(flagWrap); strip.appendChild(up);
+    strip.appendChild(lvl); strip.appendChild(clock);
+    strip.appendChild(flagWrap); strip.appendChild(up);
     root.appendChild(strip);
 
     var state = el("p", "tstate");
@@ -310,7 +316,9 @@ PAGE = r"""<!doctype html>
 
     var pos = {}, nodeEls = {}, seenLinks = {}, roomKey = "";
     var collapsed = false;
-    var baseSeconds = null, baseAt = 0, running = false, ended = false;
+    // The clock counts DOWN when the run is on a level clock, and up only
+    // when there is no deadline to show. dir carries which.
+    var baseSeconds = null, baseAt = 0, dir = 1, running = false, ended = false;
 
     function buildNodes(rooms) {
       gNodes.textContent = "";
@@ -383,9 +391,12 @@ PAGE = r"""<!doctype html>
     }
 
     function tick() {
-      if (baseSeconds === null) { clock.textContent = "—"; return; }
+      if (baseSeconds === null) { clock.textContent = "—"; clock.className = ""; return; }
       var extra = (running && !ended) ? (Date.now() - baseAt) / 1000 : 0;
-      clock.textContent = fmt(baseSeconds + extra);
+      var v = baseSeconds + dir * extra;
+      if (dir < 0 && v < 0) v = 0;
+      clock.textContent = fmt(v);
+      clock.className = (dir < 0 && v <= 30 && running && !ended) ? "low" : "";
     }
 
     function apply(run, idle, many) {
@@ -394,11 +405,20 @@ PAGE = r"""<!doctype html>
       var ending = typeof run.ending === "string" ? run.ending : null;
       var inRun = !!run.in_run;
 
-      baseSeconds = (typeof run.run_seconds === "number" && isFinite(run.run_seconds))
-        ? run.run_seconds : null;
+      var left = (typeof run.left === "number" && isFinite(run.left)) ? run.left : null;
+      if (left !== null && inRun) {
+        baseSeconds = Math.max(0, left);
+        dir = -1;
+      } else {
+        baseSeconds = (typeof run.run_seconds === "number" && isFinite(run.run_seconds))
+          ? run.run_seconds : null;
+        dir = 1;
+      }
       baseAt = Date.now();
       running = inRun;
       ended = !!ending;
+      var level = (typeof run.level === "number" && isFinite(run.level)) ? run.level : null;
+      lvl.textContent = level ? ("L" + level) : "—";
 
       // A fresh run: stale collapse state and link-animation memory die
       // BEFORE nodes and links render — no one-poll flash of the old web,
@@ -440,17 +460,24 @@ PAGE = r"""<!doctype html>
 
       flags.textContent = (typeof run.flags_left === "number" && isFinite(run.flags_left))
         ? (many ? String(run.flags_left) : run.flags_left + " left") : "—";
-      up.textContent = alive + " rooms up";
+      var lleft = (typeof run.links_left === "number" && isFinite(run.links_left))
+        ? run.links_left : null;
+      up.textContent = lleft === null ? (alive + " rooms up")
+        : (lleft === 1 ? "1 link to go" : lleft + " links to go");
 
       if (ending === "NAMED") {
         state.textContent = "NAMED IT";
         state.className = "tstate";
         if (!collapsed) collapse();
-      } else if (ending === "CORNERED" || ending === "SWARMED") {
+      } else if (ending === "TEN") {
+        state.textContent = "REACHED TEN";
+        state.className = "tstate";
+        if (!collapsed) collapse();
+      } else if (ending) {
         state.textContent = ending;
         state.className = "tstate";
       } else if (idle) {
-        state.textContent = "three rooms up. say hi to start.";
+        state.textContent = "ten levels. say hi to start.";
         state.className = "tstate dormant";
       } else {
         state.innerHTML = "&nbsp;";
@@ -562,7 +589,8 @@ PAGE = r"""<!doctype html>
     // An empty house still shows the shape of the game, so a visitor can
     // see what they'd be walking into.
     var shown = idle ? [{ id: "idle", rooms: template, links: [], flags_left: 6,
-                          ending: null, run_seconds: null, in_run: false }] : runs;
+                          ending: null, run_seconds: null, in_run: false,
+                          level: 1, links_left: 1, left: null }] : runs;
 
     var many = shown.length > 1;
     elWall.className = many ? "wall many" : "wall one";
@@ -616,17 +644,16 @@ PAGE = r"""<!doctype html>
       elDoorLine.textContent = "start with Maria. she hands you the other two.";
     }
 
+    var bits = [];
+    var top = typeof s.best_level === "number" ? s.best_level : 0;
+    if (top > 1) bits.push("highest level reached " + top + "/" + (s.top_level || 10));
     var times = [];
     for (var m = 0; m < best.length; m++) {
       if (typeof best[m] === "number" && isFinite(best[m])) times.push(fmt(best[m]));
     }
-    if (times.length) {
-      elFoot.textContent = "fastest naming " + times.join(" · ");
-      elFoot.className = "show";
-    } else {
-      elFoot.textContent = "";
-      elFoot.className = "";
-    }
+    if (times.length) bits.push("fastest naming " + times.join(" · "));
+    elFoot.textContent = bits.join("  ·  ");
+    elFoot.className = bits.length ? "show" : "";
   }
 
   function tickAll() {

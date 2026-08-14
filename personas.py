@@ -11,6 +11,7 @@ Two backends, picked by which key is in .env:
 
 import json
 import os
+import re
 from pathlib import Path
 
 import httpx
@@ -189,4 +190,45 @@ def persona_turn(
     if new_fact is not None:
         legal.add(new_fact.id)
     turn.facts_used = [fid for fid in turn.facts_used if fid in legal]
+    turn.message = detic(polish(turn.message), history)
     return turn
+
+
+# Punctuation nobody types into a chat app. The voice cards ban all of it
+# and an open model still reaches for it a few times an hour — and one em
+# dash in a text message is the single cheapest tell that a person didn't
+# write it. Prompting is the request; this is the guarantee.
+_DASH = re.compile(r"\s*(?:—|–|\s--\s)\s*")
+_BANGS = re.compile(r"!{2,}")
+_SPACE = re.compile(r"[ \t]{2,}")
+
+
+# A voice card asks for a verbal tic, and then the model ends every single
+# message with it. One "anyway." is a person; four in a row is a template,
+# and a template is the one thing these three must never read as. The card
+# already forbids it and gets ignored, so this enforces it: a trailing tic
+# that already appeared recently in this room gets quietly clipped.
+_TICS = re.compile(r"[\s,]*\b(anyway|anyways|whatever|idk|lol|haha)\b[.!]?\s*$",
+                   re.IGNORECASE)
+
+
+def detic(message: str, history) -> str:
+    m = _TICS.search(message)
+    if not m:
+        return message
+    tic = m.group(1).lower()
+    recent = [h.get("text", "") for h in (history or [])[-6:] if h.get("who") == "you"]
+    if not any(tic in t.lower() for t in recent):
+        return message
+    trimmed = message[:m.start()].rstrip(" ,")
+    return trimmed if len(trimmed.split()) >= 3 else message
+
+
+def polish(message: str) -> str:
+    m = _DASH.sub(", ", message or "")
+    m = m.replace(";", ",")
+    m = _BANGS.sub("!", m)
+    m = _SPACE.sub(" ", m)
+    # ", ." and ", ," read worse than what they replaced.
+    m = re.sub(r",\s*([.,!?])", r"\1", m)
+    return m.strip()

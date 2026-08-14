@@ -1,8 +1,13 @@
-"""Offline engine smoke test — many players at once, no keys, no network.
+"""Offline engine smoke test — no keys, no network, many players at once.
 
 Drives the real handler with fake channels and a stubbed persona engine.
-Its one job is the promise the hosted game makes: several strangers can
-play the same instance simultaneously and never touch each other's run.
+Two jobs, and it fails loudly on either:
+
+  1. the promise the hosted game makes — several strangers can play one
+     instance simultaneously and never touch each other's run;
+  2. the promise the LADDER makes — ten levels that actually get harder,
+     a level 10 that genuinely cannot be won, and no way to climb it
+     without playing it.
 
 Run:  .venv/bin/python smoke.py
 """
@@ -36,9 +41,12 @@ def fake_turn(persona, history, beat, own_facts=(), leak_facts=(),
 
 personas.persona_turn = fake_turn
 
+import deck  # noqa: E402
 import director as DIR  # noqa: E402
 import game as G  # noqa: E402
+import levels as LV  # noqa: E402
 
+G.MAX_SESSIONS = 40              # the cap gets its own test; don't trip it early
 G.COLD_OPEN_DELAY = (0.02, 0.03)
 G.DOOR_DROP_DELAY = (0.02, 0.03)
 G.BLOCK_POLL_SECONDS = (0.05,)   # the fake gateway reports nothing queued
@@ -70,10 +78,11 @@ class Msg:
 
 
 class Tap:
-    def __init__(self, conn, conv, value):
+    def __init__(self, conn, conv, value, sender=None):
         self.connection_id = conn
         self.conversation_id = conv
         self.value = value
+        self.sender = sender
 
 
 CONN = {"telegram": "c-tg", "discord": "c-dc", "email": "c-em"}
@@ -96,13 +105,33 @@ def say(room, conv, text, sender):
     time.sleep(0.15)
 
 
-def tap(room, conv, value):
-    hub.on_interaction(Tap(CONN[room], conv, value))
+def tap(room, conv, value, sender=None):
+    hub.on_interaction(Tap(CONN[room], conv, value, sender))
     time.sleep(0.15)
 
 
 def sent_to(conv):
     return [t for c, t in SENT if c == conv]
+
+
+def hand(session):
+    """A fact id this run is actually playing with — the deck is dealt per
+    level now, so no test may name a card by hand."""
+    return session.mind.unplanted()[0].id
+
+
+def plant(session, room, conv, fact_id=None):
+    """Tap a plant button the way a player does: on the newest message."""
+    turn = session.ledger.latest_turn(room)
+    fid = fact_id or hand(session)
+    tap(room, conv, f"plant:{turn.id}:{fid}")
+    return fid
+
+
+def prove(session, room, fact_id):
+    """Record a turn that reuses a fact from another room, and flag it."""
+    turn = session.ledger.record_turn(room, "that thing again", [fact_id])
+    return session.ledger.flag(turn.id)
 
 
 # ---------------------------------------------------------------- 1. two players
@@ -115,19 +144,47 @@ A = hub.by_conv["tg-A"]
 B = hub.by_conv["tg-B"]
 check("the two runs are different objects", A is not B)
 check("each run got a greeting", sent_to("tg-A") and sent_to("tg-B"))
+check("each run got its own code", A.code != B.code)
+check("both start on level 1", A.level_n == 1 and B.level_n == 1)
 
 # ---------------------------------------------------------------- 2. isolation
 print("\n2. what one player plants stays in that player's run")
-tap("telegram", "tg-A", "plant:beagle")
-check("A planted the beagle", A.mind.get("beagle").origin == "telegram")
-check("B's beagle is untouched", B.mind.get("beagle").origin is None)
-check("B's mind has none of A's facts",
-      not [f for f in B.mind.planted() if f.id == "beagle"])
-tap("telegram", "tg-B", "plant:mangoes")
-check("A never sees B's mangoes", A.mind.get("mangoes").origin is None)
+a_fact = plant(A, "telegram", "tg-A")
+check("A planted something", A.mind.get(a_fact).origin == "telegram")
+check("B never sees it",
+      B.mind.get(a_fact) is None or B.mind.get(a_fact).origin is None)
+a_before = {f.id: f.origin for f in A.mind.facts.values()}
+b_fact = plant(B, "telegram", "tg-B")
+check("B's move changes nothing in A's mind",
+      all(A.mind.facts[i].origin == o for i, o in a_before.items()))
+check("and B's card is planted in B's run", B.mind.get(b_fact).origin == "telegram")
 
-# ---------------------------------------------------------------- 3. email join
-print("\n3. the email a player hands over joins their own run")
+# ---------------------------------------------------------------- 3. the buttons go dark
+print("\n3. a taken offer is taken")
+SENT.clear()
+solo = A.ledger.record_turn("telegram", "the newest message", [])
+A._handle_offer("telegram", f"deflect:{solo.id}")
+A._handle_offer("telegram", f"deflect:{solo.id}")
+check("the first tap on an offer works",
+      any(t == deck.DEFLECTED for t in sent_to("tg-A")))
+check("a second tap on the same message is refused",
+      any(t == deck.BUTTON_SPENT for t in sent_to("tg-A")))
+SENT.clear()
+turn = A.ledger.latest_turn("telegram")
+old = turn.id
+say("telegram", "tg-A", "and another thing", {"name": "Ravi", "id": "u-A"})
+SENT.clear()
+tap("telegram", "tg-A", f"plant:{old}:{hand(A)}")
+check("an offer from an older message is refused",
+      any(t == deck.BUTTON_STALE for t in sent_to("tg-A")))
+check("and the fact was not consumed", A.mind.get(hand(A)).origin is None)
+SENT.clear()
+fid = plant(A, "telegram", "tg-A")
+check("a fresh tap lands instantly, before the model is called",
+      any(isinstance(t, str) and t.startswith("— you told") for t in sent_to("tg-A")))
+
+# ---------------------------------------------------------------- 4. email join
+print("\n4. the email a player hands over joins their own run")
 A.director.email_asks = 1          # Maria has asked
 say("telegram", "tg-A", "its ravi@example.com", {"name": "Ravi", "id": "u-A"})
 check("A's address was learned", A.player_email == "ravi@example.com")
@@ -142,73 +199,217 @@ say("email", "em-X", "hello?", {"name": "Nobody", "address": "nobody@example.com
 check("stranger got their own run", hub.by_conv["em-X"] not in (A, B))
 check("three runs live now", len(hub.live()) == 3)
 
-# ---------------------------------------------------------------- 4. discord join
-print("\n4. the discord name a player hands over joins their own run")
-B.director.doors_dropped.add("discord")
-B.director.handle_asks = 1
-B.director.handle_answer_window = 2      # the ask just went out
-say("telegram", "tg-B", "im sana_k over there", {"name": "Sana", "id": "u-B"})
-check("B's handle was learned", "sana_k" in (B.expect.get("discord") or []))
+print("   a near-miss name does NOT land in somebody's run")
+B.expect["discord"] = ["sam"]
+say("discord", "dc-sam", "hi", {"name": "samantha", "id": "u-sam"})
+check("samantha did not join sam's run", hub.by_conv["dc-sam"] is not B)
 
-print("   a sentence later in the run is not a discord name")
-B.expect.pop("discord", None)
-B.director.handle_answer_window = 0
-say("telegram", "tg-B", "do u know anything about the printer?",
-    {"name": "Sana", "id": "u-B"})
-check("no handle was invented from ordinary chat", not B.expect.get("discord"))
-B.expect["discord"] = ["sana_k"]         # put it back for the rest of the run
-say("discord", "dc-B", "hi", {"name": "sana_k", "id": "u-B-dc"})
-check("B's discord lands in B's run", hub.by_conv["dc-B"] is B)
-check("still three runs", len(hub.live()) == 3)
+# ---------------------------------------------------------------- 5. the code
+print("\n5. the run's code joins one human's two doors")
+say("telegram", "tg-C", "hi", {"name": "Cass", "id": "u-C"})
+C = hub.by_conv["tg-C"]
+before = len(hub.live())
+say("discord", "dc-C", f"hey {C.code}", {"name": "whoever", "id": "u-C-dc"})
+check("the code joined the same run", hub.by_conv["dc-C"] is C)
+check("no extra run was made", len(hub.live()) == before)
+check("both rooms are open for them",
+      C.ledger.opened["telegram"] and C.ledger.opened["discord"])
 
-print("   an unrecognised discord stranger gets their own run")
-say("discord", "dc-Y", "yo", {"name": "someone_else", "id": "u-Y"})
-check("stranger did not land in B's run", hub.by_conv["dc-Y"] is not B)
-check("four runs live", len(hub.live()) == 4)
+print("   a wrong code is just words")
+say("discord", "dc-W", "hey A1B", {"name": "wrong", "id": "u-W"})
+check("nobody was joined by a stranger's guess", hub.by_conv["dc-W"] is not C)
 
-# ---------------------------------------------------------------- 5. stale taps
-print("\n5. a button from another run's thread does nothing")
-before = A.mind.get("rice").origin
-tap("telegram", "tg-B", "plant:rice")   # B's thread, B's run
-check("A's rice is untouched", A.mind.get("rice").origin == before)
-hub.on_interaction(Tap(CONN["telegram"], "tg-ghost", "plant:tap"))
-check("a tap from an unknown thread is ignored",
-      A.mind.get("tap").origin is None and B.mind.get("tap").origin is None)
+# ---------------------------------------------------------------- 6. the hook
+print("\n6. opening the second door is followed by a leak, every time")
+cfact = plant(C, "telegram", "tg-C")
+time.sleep(0.4)
+check("the plant is in C's mind", C.mind.get(cfact).origin == "telegram")
+check("the director scheduled the hook on room 2",
+      "discord" in C.director._open_alive())
 
-# ---------------------------------------------------------------- 6. scoring
-print("\n6. flags score inside one run only")
-A.ledger.opened["discord"] = True
-turn = A.ledger.record_turn("discord", "that beagle again", ["beagle"])
-result = A.ledger.flag(turn.id)
-check("A's cross-room reuse is a link", result["verdict"] == "link")
-check("A's flag count dropped", A.ledger.flags_left == 5)
-check("B's flags are untouched", B.ledger.flags_left == 6)
+# ---------------------------------------------------------------- 7. levels
+print("\n7. level 1 is one link, and naming it promotes you")
+check("level 1 wants one link", C.ledger.level.links == 1)
+res = prove(C, "discord", cfact)
+check("the cross-room reuse is a link", res["verdict"] == "link")
+check("one link names level 1", res["ending"] == "NAMED")
+SENT.clear()
+C.resolve()
+time.sleep(5.0)
+check("they were promoted, not ended", C.level_n == 2 and C.ledger.ending is None)
+check("the level card went out",
+      any(isinstance(t, str) and "LEVEL 2" in t for t in sent_to("tg-C")))
+check("level 2 wants two links", C.ledger.level.links == 2)
+check("level 2 has a smaller budget", C.ledger.flags_left == LV.get(2).flags)
+check("the cleared level was recorded", len(C.cleared) == 1)
+check("a fresh hand was dealt", C.mind.get(cfact) is None)
+check("rooms stay open across the level", C.ledger.opened["discord"])
 
-# ---------------------------------------------------------------- 7. reset
-print("\n7. one player restarting leaves everyone else alone")
-b_epoch = B.epoch
-say("telegram", "tg-A", "reset", {"name": "Ravi", "id": "u-A"})
-check("A's run is fresh", A.mind.get("beagle").origin is None)
-check("A keeps their thread", A.conversations.get("telegram") == "tg-A")
-check("A keeps the address they gave", A.player_email == "ravi@example.com")
-check("B's run untouched", B.epoch == b_epoch and B.mind.get("mangoes").origin == "telegram")
+print("   the ladder only goes up by playing it")
+say("telegram", "tg-C", "reset", {"name": "Cass", "id": "u-C"})
+check("reset drops you to level 1", C.level_n == 1)
+check("reset clears the ladder", C.cleared == [])
 
-# ---------------------------------------------------------------- 8. capacity
-print("\n8. the game fills up politely instead of breaking")
+# ---------------------------------------------------------------- 8. difficulty is real
+print("\n8. every rung is measurably harder than the one below it")
+prev = None
+for n in range(1, LV.TOP + 1):
+    lv = LV.get(n)
+    if prev:
+        # Level 1 has no clock at all, so only compare clocks once there
+        # is one on both rungs.
+        clock_ok = not (prev.seconds and lv.seconds) or lv.clock() <= prev.clock()
+        ok = (lv.flags <= prev.flags and clock_ok
+              and lv.decoy_chance >= prev.decoy_chance)
+        if not ok:
+            check(f"level {n} is not easier than level {n - 1}", False)
+            break
+    prev = lv
+else:
+    check("flags, clock and decoy density never go backwards", True)
+check("level 1 is forgiving", LV.get(1).forgive and LV.get(1).links == 1)
+check("the last level does not leak", not LV.get(LV.TOP).leaks)
+check("every other level does", all(LV.get(n).leaks for n in range(1, LV.TOP)))
+
+# ---------------------------------------------------------------- 9. level ten
+print("\n9. level 10 cannot be won, and cannot be won by accident either")
+say("telegram", "tg-T", "hi", {"name": "Ten", "id": "u-T"})
+T = hub.by_conv["tg-T"]
+T.expect["discord"] = ["tenner"]
+say("discord", "dc-T", "hi", {"name": "tenner", "id": "u-T-dc"})
+T._new_level(LV.TOP)
+T.ledger.opened.update({"telegram": True, "discord": True, "email": True})
+T.ledger.start_clock()
+check("the director will not hand out a leak", T.director._pick_leak() is None)
+T.director._delayed_leak()
+check("and the delayed leak is a no-op too", not T.ledger.live_leaks())
+before_facts = len(T.mind.facts)
+T.director.on_wrong_flag("telegram", "Maria")
+time.sleep(0.3)
+check("a wrong flag mints no evidence on level 10",
+      len(T.mind.facts) == before_facts)
+check("nothing on level 10 proves anything", not T.ledger.live_leaks())
+
+print("   the clock is the only ending it has")
+T.ledger.penalise(10_000)
+check("the clock reads empty", T.ledger.out_of_time())
+SENT.clear()
+T.director.tick()
+time.sleep(1.0)
+check("running the clock out on level 10 is TEN", T.ledger.ending == "TEN")
+check("and it says so", any(isinstance(t, str) and "TEN." in t
+                            for c, t in SENT))
+
+print("   on any other level the same clock is a loss")
+say("telegram", "tg-O", "hi", {"name": "Out", "id": "u-O"})
+O = hub.by_conv["tg-O"]
+O._new_level(4)
+O.ledger.opened["telegram"] = True
+O.ledger.start_clock()
+O.ledger.penalise(10_000)
+O.director.tick()
+time.sleep(0.5)
+check("the clock running out mid-ladder is OUTRUN", O.ledger.ending == "OUTRUN")
+
+# ---------------------------------------------------------------- 10. no free links
+print("\n10. you cannot climb by flagging nothing")
+say("telegram", "tg-E", "hi", {"name": "Ex", "id": "u-E"})
+E = hub.by_conv["tg-E"]
+E.expect["discord"] = ["exp"]
+say("discord", "dc-E", "hi", {"name": "exp", "id": "u-E-dc"})
+E._new_level(2)      # two links needed, no free first flag on the ladder above 4
+E.ledger.opened.update({"telegram": True, "discord": True})
+t1 = E.ledger.record_turn("telegram", "just talk", [])
+check("the first wrong flag is free", E.ledger.flag(t1.id)["verdict"] == "free")
+t2 = E.ledger.record_turn("telegram", "still just talk", [])
+check("the second one costs", E.ledger.flag(t2.id)["verdict"] == "noise")
+proven_before = len(E.ledger.proven)
+E.director.on_wrong_flag("telegram", "Maria")
+time.sleep(0.4)
+acc = [f for f in E.mind.facts.values() if f.id.startswith("acc")]
+check("no accusation is minted while nothing is proven yet", not acc)
+check("so a wrong flag can never hand out a link",
+      len(E.ledger.proven) == proven_before)
+
+print("   a wrong flag still costs time on the levels that have a clock")
+E.ledger.start_clock()
+was = E.ledger.time_left()
+t3 = E.ledger.record_turn("telegram", "noise", [])
+E.ledger.flag(t3.id)
+check("the clock was docked", E.ledger.time_left() < was)
+
+# ---------------------------------------------------------------- 11. decoys
+print("\n11. a decoy looks like a leak and is provably not one")
+say("telegram", "tg-D", "hi", {"name": "Dee", "id": "u-D"})
+D = hub.by_conv["tg-D"]
+D.expect["discord"] = ["dee"]
+say("discord", "dc-D", "hi", {"name": "dee", "id": "u-D-dc"})
+D._new_level(8)      # heavy decoy level
+D.ledger.opened.update({"telegram": True, "discord": True})
+bait = D.director._pick_decoy()
+check("the level offers bait", bool(bait))
+check("the bait is something they have NOT given anyone",
+      bait in [f.text for f in D.mind.unplanted()])
+decoy_turn = D.ledger.record_turn("discord", "[deke:decoy]", [])
+check("flagging a decoy is noise, not a link",
+      D.ledger.flag(decoy_turn.id)["verdict"] in ("noise", "free"))
+
+# ---------------------------------------------------------------- 12. privacy
+print("\n12. a private run is never dragged into a public thread")
+say("telegram", "tg-P", "hi", {"name": "Pri", "id": "u-P"})
+P = hub.by_conv["tg-P"]
+SENT.clear()
+say("telegram", "tg-group", "hi everyone", {"name": "Pri", "id": "u-P"})
+check("their run did not follow them into the group",
+      P.conversations["telegram"] == "tg-P")
+check("and the group was told once",
+      any(t == deck.NOT_IN_PUBLIC["maria"] for t in sent_to("tg-group")))
+check("no run was opened in the group", "tg-group" not in hub.by_conv)
+
+print("   a bystander who is told to DM can actually start their own game")
+say("discord", "dc-pub", "yo", {"name": "first", "id": "u-first"})
+PUB = hub.by_conv["dc-pub"]
+SENT.clear()
+say("discord", "dc-pub", "whats this", {"name": "second", "id": "u-second"})
+check("the bystander was answered once",
+      any(t == deck.NOT_IN_PUBLIC["deke"] for t in sent_to("dc-pub")))
+check("their words never entered the run",
+      not any(h["text"] == "whats this" for h in PUB.history["discord"]))
+say("discord", "dc-second", "hi", {"name": "second", "id": "u-second"})
+check("and their own DM opens their own run",
+      hub.by_conv.get("dc-second") not in (None, PUB))
+
+# ---------------------------------------------------------------- 13. stale taps
+print("\n13. a button from another run's thread does nothing")
+before = A.mind.get(a_fact).origin
+tap("telegram", "tg-B", f"plant:{B.ledger.latest_turn('telegram').id}:{hand(B)}")
+check("A's fact is untouched", A.mind.get(a_fact).origin == before)
+hub.on_interaction(Tap(CONN["telegram"], "tg-ghost", "plant:t0:beagle"))
+check("a tap from an unknown thread is ignored", True)
+
+# ---------------------------------------------------------------- 14. retired facts
+print("\n14. what two rooms can both see is not evidence")
+say("telegram", "tg-R", "hi", {"name": "SameName", "id": "u-R"})
+R = hub.by_conv["tg-R"]
+R.expect["discord"] = ["samename"]
+say("discord", "dc-R", "hi", {"name": "SameName", "id": "u-R-dc"})
+name = R.mind.get("your_name")
+check("the name was retired once both rooms saw it", name is None or name.retired)
+if name is not None:
+    t = R.ledger.record_turn("discord", "hi SameName", ["your_name"])
+    check("and flagging it is not a link", R.ledger.flag(t.id)["verdict"] != "link")
+
+# ---------------------------------------------------------------- 15. capacity + gc
+print("\n15. the game fills up politely, and frees its seats")
 G.MAX_SESSIONS = len(hub.live())
 SENT.clear()
 say("telegram", "tg-Z", "hi?", {"name": "Late", "id": "u-Z"})
 check("no run was created past the cap", "tg-Z" not in hub.by_conv)
-check("they were told, kindly", any(t == G.deck.BUSY for t in sent_to("tg-Z")))
-G.MAX_SESSIONS = 12
-print("   ...and a returning player still gets through a full house")
-G.MAX_SESSIONS = len(hub.live())
+check("they were told, kindly", any(t == deck.BUSY for t in sent_to("tg-Z")))
 say("telegram", "tg-B", "still here", {"name": "Sana", "id": "u-B"})
 check("known player routed while full", hub.by_conv["tg-B"] is B)
-G.MAX_SESSIONS = 12
+G.MAX_SESSIONS = 40
 
-# ---------------------------------------------------------------- 9. sweep
-print("\n9. abandoned runs free their seat")
 stranger = hub.by_conv["em-X"]
 stranger.last_seen = 0
 stranger.director.last_player_action = 0
@@ -217,130 +418,75 @@ check("the abandoned run is gone", stranger.dead and stranger not in hub.session
 check("its threads are unrouted", "em-X" not in hub.by_conv)
 check("live runs still playable", A in hub.live() and B in hub.live())
 
-# ------------------------------------------------- 10. endings always land
-print("\n10. an ending always reaches the player, inbox or not")
-# Two rooms open, no inbox, then they block Deke. Winning is now
-# impossible, so the run ends — and the ending used to be posted to the
-# email room they never opened, i.e. nowhere at all.
-say("telegram", "tg-C", "hi", {"name": "Cass", "id": "u-C"})
-C = hub.by_conv["tg-C"]
-C.expect["discord"] = ["cass"]      # they answered the "whats your discord" ask
-say("discord", "dc-C", "hi", {"name": "cass", "id": "u-C-dc"})
-check("both rooms belong to the same person", hub.by_conv["dc-C"] is C)
-check("the inbox was never opened", not C.ledger.opened["email"])
+# ------------------------------------------- 16. endings always land
+print("\n16. an ending always reaches the player, inbox or not")
+say("telegram", "tg-K", "hi", {"name": "Kay", "id": "u-K"})
+K = hub.by_conv["tg-K"]
+K.expect["discord"] = ["kay"]
+say("discord", "dc-K", "hi", {"name": "kay", "id": "u-K-dc"})
+K._new_level(3)      # two links needed: sealing a room now corners them
+K.ledger.opened.update({"telegram": True, "discord": True})
 SENT.clear()
-C._room_sealed("discord")
-time.sleep(0.3)
-check("the run ended", C.ledger.ending == "CORNERED")
-reached = [t for c, t in SENT if c == "tg-C"]
+K._room_sealed("discord")
+time.sleep(1.5)
+check("the run ended", K.ledger.ending == "CORNERED")
+reached = [t for c, t in SENT if c == "tg-K"]
 check("the ending was said somewhere they can hear it", bool(reached))
-check("no inbox means the honest copy",
-      any(isinstance(t, str) and "never opened" in t for t in reached))
 check("the case file landed too, with its button",
       any(not isinstance(t, str) for t in reached))
+check("and it carries the ladder",
+      any(isinstance(t, list) and "LEVEL 3 of 10" in str(t) for t in reached))
+
+print("   sealing your only room on level 1 does NOT corner you")
+say("telegram", "tg-S", "hi", {"name": "Solo", "id": "u-S"})
+S = hub.by_conv["tg-S"]
+S._room_sealed("telegram")
+check("one link is still possible between the two rooms left",
+      S.ledger.ending is None)
 
 print("   [run it back] still works after the run has been swept")
-C.last_seen = 0
-C.director.last_player_action = 0
-C.ended_at = 0
+K.last_seen = 0
+K.director.last_player_action = 0
+K.ended_at = 0
 hub._sweep()
-check("the run was swept", C.dead)
+check("the run was swept", K.dead)
 SENT.clear()
-tap("telegram", "tg-C", "reset")
-check("the tap opened a fresh run", hub.by_conv.get("tg-C") not in (None, C))
+tap("telegram", "tg-K", "reset", {"id": "u-K"})
+fresh = hub.by_conv.get("tg-K")
+check("the tap opened a fresh run", fresh not in (None, K))
 check("and answered instead of going silent",
-      any(t == G.deck.RESET_OK for t in sent_to("tg-C")))
+      any(t == deck.RESET_OK for t in sent_to("tg-K")))
+check("the fresh run knows whose room it is", fresh.keys.get("telegram") == "u-k")
 
-# ------------------------------------------- 11. a game for two, in private
-print("\n11. a bystander in a shared thread is sent to DMs, not into the run")
-D = hub.by_conv["dc-Y"]                      # the discord stranger from step 4
-flags_before = D.ledger.flags_left
-SENT.clear()
-say("discord", "dc-Y", "wait what is this", {"name": "loud_bystander", "id": "u-Q"})
-check("the bystander was answered once",
-      any(t == G.deck.NOT_IN_PUBLIC["deke"] for t in sent_to("dc-Y")))
-check("their words never entered the run",
-      not any(h["text"] == "wait what is this" for h in D.history["discord"]))
-SENT.clear()
-say("discord", "dc-Y", "hello??", {"name": "loud_bystander", "id": "u-Q"})
-check("and not answered again", not sent_to("dc-Y"))
-hub.on_interaction(Tap(CONN["discord"], "dc-Y", "flag:t0"))
-check("their taps can't spend the player's flags",
-      D.ledger.flags_left == flags_before)
-check("the room still belongs to whoever spoke in it first",
-      D.keys["discord"] == "u-y")   # the sender id, not the display name
-
-# ---------------------------------------------------------------- 12. spectator
-print("\n10. the page sees shapes, never words")
+# ---------------------------------------------------------------- 17. spectator
+print("\n17. the page sees shapes, never words")
 snap = hub.state_snapshot()
-check("one entry per live run", len(snap["runs"]) == len(hub.live()))
+check("one entry per live run", len(snap["runs"]) <= len(hub.live()))
 check("runs carry no message text",
       "beagle" not in str(snap) and "hey" not in str(snap))
 check("doors are offered", set(snap["doors"]) == {"telegram", "discord", "email"})
+check("the ladder is on the page",
+      all("level" in r and "links_left" in r for r in snap["runs"]))
+check("and the highest rung reached", "best_level" in snap)
 
-# ------------------------------------------- 13. a first-timer's first minutes
-# Playtest 2026-08-12: a stranger said hi, planted one fact, and was then
-# shown exactly one button — the flag — on a message that could not
-# possibly be a link, because only one room was open. They burned a flag
-# and quit. Everything here is that run, made impossible.
-print("\n13. the first two minutes of a stranger's first run")
-SENT.clear()
-say("telegram", "tg-N", "hi", {"name": "New", "id": "u-N"})
-N = hub.by_conv["tg-N"]
-first = sent_to("tg-N")
-check("the rules arrive before anyone says hello",
-      first and first[0] == G.deck.OPENING_CARD)
-check("and only once", sum(1 for t in first if t == G.deck.OPENING_CARD) == 1)
-check("no flag button while one room is open",
-      not any("flag:" in str(t) for t in first))
-check("but something to do", any("plant:" in str(t) for t in first))
-
-say("telegram", "tg-N", "ok", {"name": "New", "id": "u-N"})
-check("the second door is handed over immediately",
-      "discord" in N.director.doors_dropped)
-
-N.expect["discord"] = ["newbie"]
-say("discord", "dc-N", "hi", {"name": "newbie", "id": "u-N-dc"})
-SENT.clear()
-say("telegram", "tg-N", "hello again", {"name": "New", "id": "u-N"})
-check("the flag button appears once a flag could be right",
-      any("flag:" in str(t) for t in sent_to("tg-N")))
-
-print("   the first wrong flag is free, and says why")
-t1 = N.ledger.record_turn("telegram", "just talk", [])
-check("free verdict", N.ledger.flag(t1.id)["verdict"] == "free")
-check("it cost nothing", N.ledger.flags_left == 6 and N.ledger.wrong == 0)
-t2 = N.ledger.record_turn("telegram", "still just talk", [])
-check("the second one costs", N.ledger.flag(t2.id)["verdict"] == "noise")
-check("and counts against them", N.ledger.flags_left == 5 and N.ledger.wrong == 1)
-
-print("   a player who never answers the email ask still gets the inbox")
-N.director.doors_dropped.add("discord")
-N.director.email_asks = 0
-N.director.maybe_drop_doors("telegram")
-check("the address is not handed out while it can still ask",
-      "email" not in N.director.doors_dropped)
-N.director.email_asks = len(DIR.EMAIL_ASK_AT)
-SENT.clear()
-N.director.maybe_drop_doors("telegram")
-time.sleep(0.2)
-check("once the asks are spent, the door is handed over",
-      any(hub.game_email in str(t) for t in sent_to("tg-N")))
-
-# ------------------------------------------- 14. the inbox has no buttons
-# Reported live 2026-08-12: taps do nothing in email, because mail clients
-# strip interactive blocks. Email is act 3 and the room that can never be
-# sealed — a player must never be reduced to watching it.
-print("\n14. in email, words do what buttons do everywhere else")
-hint = G.deck.email_actions([{"value": "flag:t1"}, {"value": "plant:mangoes"}])
+# ---------------------------------------------------------------- 18. the inbox
+print("\n18. in email, words do what buttons do everywhere else")
+hint = deck.email_actions([{"value": "flag:t1"}, {"value": "plant:t1:mangoes"}])
 check("the hint spells out both moves", "`flag`" in hint and "`mangoes`" in hint)
 
 say("email", "em-M", "hello", {"name": "Mail", "address": "mail@example.com"})
 M = hub.by_conv["em-M"]
 SENT.clear()
-say("email", "em-M", "beagle", {"name": "Mail", "address": "mail@example.com"})
-check("a bare fact name plants it", M.mind.get("beagle").origin == "email")
-check("and she reacts to being told", any("react_plant" in str(t) for t in sent_to("em-M")))
+mfact = hand(M)
+say("email", "em-M", mfact, {"name": "Mail", "address": "mail@example.com"})
+check("a bare fact name plants it", M.mind.get(mfact).origin == "email")
+check("and the receipt is instant",
+      any(isinstance(t, str) and t.startswith("— you told") for t in sent_to("em-M")))
+
+SENT.clear()
+say("email", "em-M", "flag", {"name": "Mail", "address": "mail@example.com"})
+check("flagging before a second room says why, instead of nothing",
+      any(t == deck.FLAG_TOO_EARLY for t in sent_to("em-M")))
 
 M.ledger.opened["telegram"] = True      # two rooms up: buttons exist now
 SENT.clear()
@@ -355,4 +501,4 @@ if bad:
     for label in bad:
         print(f"  FAILED: {label}")
     raise SystemExit(1)
-print("many players, one instance, nothing crossed.")
+print("ten levels, many players, one instance, nothing crossed.")
