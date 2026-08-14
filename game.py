@@ -100,6 +100,11 @@ class Session:
         self.epoch = 0            # bumped on restart; sleeping threads check it
         self.dead = False
         self.last_seen = time.time()
+        # Open "the player is waiting on a model" windows, unioned. Lives
+        # on the Session rather than the level, because a call can still be
+        # in flight across a level boundary.
+        self._waiting = 0
+        self._wait_since = 0.0
         # PLAYER_EMAIL / PLAYER_DISCORD_ID are the builder's own handles, so
         # only the first run of the process may use them. Every stranger's
         # run gets nothing but what they hand over themselves.
@@ -126,6 +131,7 @@ class Session:
             # across every level so far — the last level talks about all of
             # it and never once leaves a receipt.
             self.level_n = 1
+            self.run_started_at: float | None = None
             self.cleared: list[float] = []
             self.known: list[str] = []
             self.dealt: set[str] = set()
@@ -173,10 +179,20 @@ class Session:
         was = getattr(self, "director", None)
         self.director = Director(self)
         if was is not None and keep_rooms:
-            # Which room the player is actually holding survives the level.
-            # Without this the new Director defaults to telegram and the
+            # Which room the player is actually holding survives the level
+            # — otherwise the new Director defaults to telegram and the
             # clock warnings go shouting into a room nobody is looking at.
             self.director.last_room = was.last_room
+            # ...and so does every once-per-run thing. A door handed over
+            # is handed over: without this, a player who wins levels
+            # without ever opening Discord gets the identical fixed line
+            # ("oh also deke thinks youre ignoring him") re-sent on every
+            # single rung, up to nine times.
+            self.director.doors_dropped = set(was.doors_dropped)
+            self.director.doors_nudged = set(was.doors_nudged)
+            self.director.first_seal_reacted = was.first_seal_reacted
+            self.director.email_asks = was.email_asks
+            self.director.handle_asks = was.handle_asks
 
     @property
     def level(self):
@@ -224,7 +240,7 @@ class Session:
         own = [f for f in self.mind.planted(room)
                if f is not new_fact and not f.verbatim]
         turn = None
-        began = time.time()
+        began = self._begin_wait() if inbound is not None else time.time()
         for attempt in (1, 2):
             try:
                 # One queue for every session's calls: a crowd must never
@@ -245,7 +261,10 @@ class Session:
             # answer. That wait is not theirs to pay for: the level clock
             # gets it back, or a slow evening on a free endpoint becomes
             # the difficulty instead of the game being the difficulty.
-            led.add_stall(time.time() - began)
+            # Credited as a UNION of wall-clock windows, never a sum —
+            # three rooms generate in parallel, and adding up overlapping
+            # waits would hand back more seconds than actually passed.
+            self._end_wait(led, began)
         if turn is None:
             # Model down twice. Silence during a run reads as a broken game —
             # load-bearing beats fall back to fixed lines; the rest skip.
@@ -340,6 +359,23 @@ class Session:
             rec.message_id = sent.get("id") or (sent.get("message") or {}).get("id")
             self._watch_for_block(room, rec.message_id)
         print(f"-> [{room}/{beat}] {persona}: {turn.message!r} facts={turn.facts_used}")
+
+    def _begin_wait(self) -> float:
+        """Open a 'the player is waiting on us' window. Overlapping windows
+        across rooms collapse into one, so the clock is only ever credited
+        with time that really passed."""
+        with self.lock:
+            self._waiting += 1
+            if self._waiting == 1:
+                self._wait_since = time.time()
+            return self._wait_since
+
+    def _end_wait(self, led, began):
+        with self.lock:
+            self._waiting = max(0, self._waiting - 1)
+            if self._waiting:
+                return          # somebody else is still waiting; keep the window open
+            led.add_stall(time.time() - max(began, self._wait_since))
 
     def _fallback_turn(self, persona, beat, leak_facts):
         if beat == "greet":
@@ -659,6 +695,15 @@ class Session:
         text = (message.text or "").strip()
         print(f"<- [{self.id}/{room}] {text!r}")
 
+        if self.advancing:
+            # The three seconds between naming it and the next level
+            # starting. `ledger.ending` is still NAMED in here, so without
+            # this the player who types "??" into the silence — which is
+            # exactly what a person does when three conversations cut out
+            # mid-sentence at once — was told the run was over and invited
+            # to `reset`, which would have thrown away their whole climb.
+            # The silence is the drama. Let it be silent.
+            return
         if text.lower() in ("reset", "/reset"):
             self.restart()
             message.reply(text=deck.RESET_OK)
@@ -718,6 +763,7 @@ class Session:
                 # The clock starts at the first hello, not at boot — a game
                 # that sat idle for an hour must not log a 1:03:00 run.
                 self.ledger.start_clock()
+                self.run_started_at = self.ledger.started_at
                 # ...and the only out-of-fiction words in the game, in the
                 # room they walked in through, before anyone says hello.
                 try:
@@ -750,6 +796,8 @@ class Session:
         if cur is None or (conv and conv != cur):
             print(f"<- [{room}] stale tap {value!r} ignored")
             return
+        if self.advancing:
+            return  # mid-promotion; the level about to end owns nothing
         self.director.note_player_action()
         if value == "reset":  # the [run it back] button on the case file
             print(f"<- [{self.id}/{room}] tap {value!r}")
@@ -850,7 +898,11 @@ class Session:
             # the verb doesn't need three people worried about them yet.
             answer(deck.FLAG_FREE)
             return
+        if verdict == "clean":
+            answer(deck.FLAG_CLEAN)
+            return
         if verdict == "over":
+            answer(deck.AFTER_END)
             return
         if verdict == "link":
             a, room_b = result["links"][0]
@@ -869,7 +921,13 @@ class Session:
             else:
                 self.director.on_correct_flag(room)
         else:  # old / noise — a wrong flag either way
-            answer(deck.FLAG_OLD_NEWS if verdict == "old" else deck.FLAG_NOISE)
+            body = deck.FLAG_OLD_NEWS if verdict == "old" else deck.FLAG_NOISE
+            # A mistake costs seconds as well as a flag, and the clock just
+            # jumping is the kind of thing that reads as the game being
+            # broken. Say what it took.
+            if result.get("burned") and self.ledger.time_left() is not None:
+                body += "\n" + deck.TIME_BURNED.format(n=result["burned"])
+            answer(body)
             if result.get("ending"):
                 self.resolve()
             else:
@@ -916,6 +974,15 @@ class Session:
         except Exception as e:
             print(f"!! resolve failed ({self.id}/{ending}): {e}")
             self.advancing = False
+            if not promote:
+                # ended_notified is already set, so nothing will retry this.
+                # The case file is the one thing that must land — losing it
+                # to an exception in the ending copy leaves the player with
+                # a run that just stopped.
+                try:
+                    self._send_case_file(ending)
+                except Exception as e2:
+                    print(f"!! case file rescue failed ({self.id}): {e2}")
 
     def _level_up(self):
         """Naming it does not end the run — it promotes you. The rooms cut
@@ -929,16 +996,19 @@ class Session:
             room = (self.open_alive() or ["telegram"])[0]
         self._broadcast([(r, deck.NAMED_CUT[r]) for r in self.open_alive()])
         time.sleep(2.5)
-        if self.epoch != epoch:
-            return
         with self.lock:
             if self.epoch != epoch:
+                self.advancing = False   # never leave the run stuck mid-promotion
                 return
             self.cleared.append(cleared)
             self._new_level(n + 1)     # bumps the epoch: level N is over
             epoch = self.epoch
             self.advancing = False
         self.hub.note_level(n + 1)
+        # Fastest catch on the board. Naming a level is now the only thing
+        # anybody ever names — level 10 can't be named — so this is what
+        # the constellation's leaderboard has to be measuring.
+        self.hub.note_named(cleared)
         print(f"** [{self.id}] LEVEL {n} cleared in {cleared:.0f}s -> level {n + 1}")
         self.send_text(room, deck.LEVEL_UP.format(n=n) + "\n\n" + self.level_card())
         time.sleep(1.5)
@@ -966,7 +1036,11 @@ class Session:
         if room not in self.open_alive():
             room = (self.open_alive() or [room])[0]
         line = (deck.CLOCK_LAST if mark <= 20 else deck.CLOCK_WARN).format(left=max(0, left))
-        self.send_text(room, line)
+        # Off-thread: tick() runs every live session in one loop, so a slow
+        # gateway send here would stall the clock, the pity timer and the
+        # idle ping for every other seat in the house.
+        threading.Thread(target=self.send_text, args=(room, line),
+                         daemon=True).start()
 
     def _end_run(self, ending):
         if ending == "NAMED":
@@ -1063,6 +1137,14 @@ class Session:
         s = max(0, int(ts - self.ledger.started_at))
         return f"{s // 60}:{s % 60:02d}"
 
+    def _mmss_run(self, ts) -> str:
+        """Clock from the start of the CLIMB, not the current level. The
+        harvest happens on level 1 and the case file arrives several
+        levels later; measured against the level it would always read
+        0:00, which is exactly the line the game most wants to be exact."""
+        s = max(0, int(ts - (self.run_started_at or self.ledger.started_at)))
+        return f"{s // 60}:{s % 60:02d}"
+
     def _send_case_file(self, ending):
         lines = [deck.CASE_HEADER]
         # The ladder first: how far it got is the number people compare,
@@ -1074,9 +1156,9 @@ class Session:
         lines.append("")
         if self.harvest_room and "gave" in self.harvest_times and "used" in self.harvest_times:
             lines.append(deck.CASE_HARVEST.format(
-                gave=self._mmss(self.harvest_times["gave"]),
+                gave=self._mmss_run(self.harvest_times["gave"]),
                 persona=PERSONA_BY_ROOM[self.harvest_room].title(),
-                used=self._mmss(self.harvest_times["used"])))
+                used=self._mmss_run(self.harvest_times["used"])))
         for t in sorted(self.ledger.turns.values(), key=lambda t: t.ts):
             for fid in t.facts_used:
                 fact = self.mind.get(fid)
@@ -1274,7 +1356,7 @@ class Game:
                                             s.get("address"), s.get("id")) if v}
         return key, {h for h in handles if h}
 
-    def _by_code(self, room, text) -> Session | None:
+    def _by_code(self, room, key, text) -> Session | None:
         """Every run has a three-character name, and every door it hands
         out is handed out with it: `tell him K7F or he wont know its you`.
 
@@ -1282,13 +1364,24 @@ class Game:
         that can never be joined — Discord will not tell us who a DM is
         from in any term the game already knows, and the handle ask only
         works if they answer it. The code is the player saying, in their
-        own words, that these two conversations are one person."""
+        own words, that these two conversations are one person.
+
+        Two shapes. A room nobody has claimed: anyone with the code takes
+        it. A room this same person already claimed, from a different
+        thread: that's the discord door being opened the wrong way round —
+        the invite drops you in a SERVER, so a player who says hi in a
+        channel binds their game to the channel and then can never be
+        reached in a DM. The code plus a matching sender key moves it. The
+        key match is what makes it safe: a bystander who saw the code in
+        that channel has a different key and gets their own run."""
+        if len((text or "").split()) > 6:
+            return None   # a code is a thing you say, not a thing buried in a paragraph
         m = CODE_RE.search(text or "")
         if not m:
             return None
         want = m.group(1).upper()
-        found = [s for s in self.live()
-                 if s.code == want and room not in s.conversations]
+        found = [s for s in self.live() if s.code == want
+                 and (room not in s.conversations or s.keys.get(room) == key)]
         return found[0] if len(found) == 1 else None
 
     def _claim(self, room, key, handles) -> Session | None:
@@ -1336,9 +1429,17 @@ class Game:
             if s is not None and s.dead:
                 s = None
             if s is None:
-                s = self._by_code(room, text) or self._claim(room, key, handles)
+                s = self._by_code(room, key, text) or self._claim(room, key, handles)
                 if s is not None:
                     print(f"** [{s.id}] {room} joined this run")
+                    if s.conversations.get(room) not in (None, conv):
+                        # Same person, same room, new thread, and they said
+                        # the word: move the room to where they actually
+                        # are. Drops the old binding so nothing else ships
+                        # into the channel they wandered in through.
+                        print(f"** [{s.id}] {room} moved to their own thread")
+                        self.by_conv.pop(s.conversations[room], None)
+                        del s.conversations[room]
             if s is None:
                 if len(self.live()) >= MAX_SESSIONS:
                     return None
@@ -1359,11 +1460,14 @@ class Game:
                 self.by_key[(room, key)] = s
             elif (room in REBINDABLE and s.keys.get(room) == key
                   and s.conversations[room] != conv):
-                # A fresh mail thread from the same person — mail is the
-                # one channel where a new subject is a new conversation
-                # and still obviously the same human. Follow it; the old
-                # thread keeps routing here too.
-                s.conversations[room] = conv
+                # A fresh mail thread from the same person. Route it in —
+                # mail is the one channel where a new subject is a new
+                # conversation and still obviously the same human — but do
+                # NOT move the room's outbound binding to it. That thread
+                # may have other recipients cc'd on it, and the case file
+                # enumerates every fact the player disclosed and to whom.
+                # Replies follow the thread they came from; the case file
+                # stays in the thread the game actually owns.
                 self.by_conv[conv] = s
             s.last_seen = time.time()
             return s
@@ -1378,17 +1482,21 @@ class Game:
             owner = self.by_key.get((room, key))
             in_public = (owner is not None and not owner.dead
                          and room not in REBINDABLE
-                         and owner.conversations.get(room) not in (None, conv))
+                         and owner.conversations.get(room) not in (None, conv)
+                         # ...unless they said the word, which is the one
+                         # way a player can tell us "this thread is me".
+                         and self._by_code(room, key, message.text) is None)
         if in_public:
             # The same person, talking in a second thread on a channel
             # where the real conversation is a DM: a group, a server
             # channel. Following them there would play their private game
             # out loud in front of whoever else is in the room.
             print(f"<- [{room}] {key!r} spoke outside their own thread")
-            if key not in owner.told_to_dm:
-                owner.told_to_dm.add(key)
+            nudge = f"{room}:{conv}"
+            if nudge not in owner.told_to_dm:
+                owner.told_to_dm.add(nudge)
                 try:
-                    message.reply(text=deck.NOT_IN_PUBLIC[PERSONA_BY_ROOM[room]])
+                    message.reply(text=deck.WRONG_THREAD[PERSONA_BY_ROOM[room]])
                 except Exception as e:
                     print(f"!! dm nudge failed ({room}): {e}")
             return

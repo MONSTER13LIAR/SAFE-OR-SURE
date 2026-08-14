@@ -234,7 +234,7 @@ channels — the same leak on levels 1, 5 and 9, a decoy, and level 10 — so
 you can read whether the difficulty curve actually reads as one.
 
 `smoke.py` drives the real handler with fake channels and a stubbed
-persona engine, no keys and no network. **96 checks**, and they cover the
+persona engine, no keys and no network. **118 checks**, and they cover the
 two promises this thing makes: several strangers play one instance and
 never touch each other's run, and the ladder cannot be climbed except by
 playing it — no free links from wrong flags, no re-tapping a spent offer,
@@ -242,5 +242,5 @@ no dodging a losing level with `reset`, and a level 10 that provably never
 hands out a receipt.
 
 ```sh
-.venv/bin/python smoke.py     # 96/96, ~40s, no keys needed
+.venv/bin/python smoke.py     # 118/118, ~50s, no keys needed
 ```

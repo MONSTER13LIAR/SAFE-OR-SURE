@@ -25,6 +25,11 @@ ROOMS = ["telegram", "discord", "email"]
 # AND levels, so a stale flag:tN tap must miss the live turns, never collide.
 _TURN_COUNTER = itertools.count()
 
+# The most of a level's clock that can be given back as model-wait credit.
+# Enough that a bad evening on a free endpoint doesn't decide the game;
+# not enough that a fast typist can hold the clock still forever.
+STALL_CAP = 0.4
+
 
 @dataclass
 class Turn:
@@ -76,7 +81,19 @@ class Ledger:
             self.started_at = time.time()
 
     def add_stall(self, seconds: float):
-        self.stall += max(0.0, min(60.0, seconds))
+        """Credit time the player spent waiting on a model call they were
+        owed an answer to. Bounded hard, for two reasons:
+
+        Three rooms generate in parallel, so summing every call's duration
+        double-counts overlapping waits — the Session hands us unioned
+        wall-clock windows, not a sum. And even unioned, a player who
+        types continuously keeps something in flight almost 100% of the
+        time, which would freeze the clock outright and make OUTRUN and
+        TEN unreachable for anybody actually playing. So the total is
+        capped at a fraction of the budget: a slow evening can stretch the
+        level, never stop it."""
+        self.stall = min(self.stall + max(0.0, seconds),
+                         self.level.clock() * STALL_CAP)
 
     def penalise(self, seconds: int):
         self.penalty += max(0, seconds)
@@ -142,7 +159,11 @@ class Ledger:
             for b in living[i + 1:]:
                 if frozenset((a, b)) not in self.proven:
                     possible += 1
-        return possible >= self.level.links
+        if possible < self.level.links:
+            return False
+        # ...and you need a flag for every link you still owe. On the last
+        # level flags cost nothing, so this never bites there.
+        return not self.level.leaks or self.flags_left >= self.links_left()
 
     def links_left(self) -> int:
         """How many more links finish the level. The player's only sense of
@@ -195,6 +216,17 @@ class Ledger:
             return {"verdict": "link", "links": [tuple(sorted(l)) for l in new_links],
                     "ending": self.ending}
 
+        if not self.level.leaks:
+            # The last level never slips, so a flag on it is never wrong —
+            # it is the player checking, and being told no. Charging for
+            # that would be a lie and a trap: level 10 talks about things
+            # the player really did tell somebody (on an earlier level, in
+            # a Mind that no longer exists), so "nothing in that one came
+            # from another room" reads as the game cheating. Flags are free
+            # here, and the answer is honest.
+            turn.flag_verdict = "clean"
+            return {"verdict": "clean", "ending": None}
+
         if not old_links and not self.forgiven and self.level.forgive:
             # First wrong flag of the level: free, and told why. The flag is
             # the verb the game never explains, so the first use is always
@@ -210,7 +242,13 @@ class Ledger:
         self.flags_left -= self.level.wrong_cost
         self.wrong += 1
         self.penalise(self.level.time_penalty)
-        if self.wrong >= 3 or self.flags_left <= 0:
+        # Out of flags, or too few left to finish what's left to prove.
+        # The second half matters: on the tight levels one wasted flag can
+        # leave the level arithmetically dead, and without this the game
+        # would keep going for two more minutes with no outcome reachable,
+        # cheerfully printing "⚑1 · 2 links" at somebody who has already
+        # lost. Losing must be legible the moment it happens.
+        if self.flags_left <= 0 or self.flags_left < self.links_left():
             self.ending = "SWARMED"
         return {"verdict": turn.flag_verdict, "ending": self.ending,
                 "burned": self.level.time_penalty}

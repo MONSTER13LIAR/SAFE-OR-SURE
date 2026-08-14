@@ -651,7 +651,7 @@ PAGE = r"""<!doctype html>
     for (var m = 0; m < best.length; m++) {
       if (typeof best[m] === "number" && isFinite(best[m])) times.push(fmt(best[m]));
     }
-    if (times.length) bits.push("fastest naming " + times.join(" · "));
+    if (times.length) bits.push("fastest catch " + times.join(" · "));
     elFoot.textContent = bits.join("  ·  ");
     elFoot.className = bits.length ? "show" : "";
   }

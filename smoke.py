@@ -218,6 +218,35 @@ check("both rooms are open for them",
 print("   a wrong code is just words")
 say("discord", "dc-W", "hey A1B", {"name": "wrong", "id": "u-W"})
 check("nobody was joined by a stranger's guess", hub.by_conv["dc-W"] is not C)
+check("and a code buried in a paragraph is not a code",
+      hub._by_code("email", "u-C", f"hello there this is a long sentence "
+                                   f"that happens to contain {C.code} in it") is None)
+
+print("   the discord invite drops you in a SERVER, so the room can move")
+# Say hi in a channel first (binds the room there), then DM the bot. The
+# DM used to be answered once and then silently dropped forever.
+say("telegram", "tg-G", "hi", {"name": "Gee", "id": "u-G"})
+Gs = hub.by_conv["tg-G"]
+say("discord", "dc-channel", "hello?", {"name": "gee", "id": "u-G-dc"})
+check("the channel claimed the room", Gs.conversations.get("discord") == "dc-channel"
+      or hub.by_conv["dc-channel"] is not Gs)
+owner = hub.by_conv["dc-channel"]
+SENT.clear()
+say("discord", "dc-dm", "hey", {"name": "gee", "id": "u-G-dc"})
+check("a bare DM from the same person is not followed",
+      owner.conversations.get("discord") == "dc-channel")
+check("but they are told how to fix it",
+      any(t == deck.WRONG_THREAD["deke"] for t in sent_to("dc-dm")))
+say("discord", "dc-dm", owner.code, {"name": "gee", "id": "u-G-dc"})
+check("saying the word moves the room to their own thread",
+      owner.conversations.get("discord") == "dc-dm")
+check("and the channel stops routing into the run", "dc-channel" not in hub.by_conv)
+
+print("   ...but a bystander with the same code cannot take the room")
+say("discord", "dc-thief", f"hey {owner.code}", {"name": "thief", "id": "u-thief"})
+check("the thief got their own run", hub.by_conv["dc-thief"] is not owner)
+check("and the room stayed with its owner",
+      owner.conversations.get("discord") == "dc-dm")
 
 # ---------------------------------------------------------------- 6. the hook
 print("\n6. opening the second door is followed by a leak, every time")
@@ -245,6 +274,18 @@ check("the cleared level was recorded", len(C.cleared) == 1)
 check("a fresh hand was dealt", C.mind.get(cfact) is None)
 check("rooms stay open across the level", C.ledger.opened["discord"])
 
+print("   a door handed over stays handed over, across every rung")
+# doors_dropped used to live on the Director, which is rebuilt per level —
+# so a player who climbed without opening Discord got the identical fixed
+# line re-sent on every single level, up to nine times.
+check("the door was dropped on the level just played",
+      "discord" in C.director.doors_dropped or C.ledger.opened["discord"])
+C.director.doors_dropped.add("email")
+C._new_level(C.level_n + 1)
+check("and the new level remembers it",
+      "email" in C.director.doors_dropped)
+C._new_level(2)   # back to where the rest of this section expects it
+
 print("   the ladder only goes up by playing it")
 say("telegram", "tg-C", "reset", {"name": "Cass", "id": "u-C"})
 check("reset drops you to level 1", C.level_n == 1)
@@ -268,6 +309,18 @@ for n in range(1, LV.TOP + 1):
 else:
     check("flags, clock and decoy density never go backwards", True)
 check("level 1 is forgiving", LV.get(1).forgive and LV.get(1).links == 1)
+
+# The clock has to be able to run out, or OUTRUN and TEN are unreachable
+# and the pressure the whole ladder rests on is decorative. Waiting on a
+# slow model gives seconds back; it can never give back the whole level.
+stall_led = G.Ledger(G.Mind(), level=LV.get(6))
+stall_led.start_clock()
+for _ in range(50):
+    stall_led.add_stall(60)
+check("model-wait credit is capped, so the clock always runs out",
+      stall_led.stall <= LV.get(6).clock() * 0.5)
+check("and a level with no clock reports none",
+      G.Ledger(G.Mind(), level=LV.get(1)).time_left() is None)
 check("the last level does not leak", not LV.get(LV.TOP).leaks)
 check("every other level does", all(LV.get(n).leaks for n in range(1, LV.TOP)))
 
@@ -289,6 +342,24 @@ time.sleep(0.3)
 check("a wrong flag mints no evidence on level 10",
       len(T.mind.facts) == before_facts)
 check("nothing on level 10 proves anything", not T.ledger.live_leaks())
+
+print("   flags on level 10 are free, and the answer is honest")
+# Level 10 talks about things the player really did tell somebody, on an
+# earlier level, in a Mind that no longer exists. Charging a flag for
+# checking — and answering "nothing in that one came from another room" —
+# would read as the game cheating on the most-watched rung.
+T.known.append("you burned rice twice this week in the new cooker")
+bait10 = T.director._pick_decoy()
+check("level 10 draws its bait from the whole climb",
+      bait10 in T.known or bait10 in [f.text for f in T.mind.unplanted()])
+flags10 = T.ledger.flags_left
+t10 = T.ledger.record_turn("discord", "[deke:decoy]", [])
+r10 = T.ledger.flag(t10.id)
+check("the verdict is clean, not noise", r10["verdict"] == "clean")
+check("it cost nothing", T.ledger.flags_left == flags10)
+check("and it did not end the run", T.ledger.ending is None)
+check("level 10 still hands out plant buttons",
+      T.director.on_player_message("discord", "hi").get("offer_plants") is not None)
 
 print("   the clock is the only ending it has")
 T.ledger.penalise(10_000)
@@ -331,6 +402,37 @@ check("no accusation is minted while nothing is proven yet", not acc)
 check("so a wrong flag can never hand out a link",
       len(E.ledger.proven) == proven_before)
 
+print("   a level you can no longer finish ends now, not in two minutes")
+say("telegram", "tg-DEAD", "hi", {"name": "Dead", "id": "u-DEAD"})
+DEAD = hub.by_conv["tg-DEAD"]
+DEAD.expect["discord"] = ["dead"]
+say("discord", "dc-DEAD", "hi", {"name": "dead", "id": "u-DEAD-dc"})
+DEAD._new_level(8)      # two flags, two links, no free mistake
+DEAD.ledger.opened.update({"telegram": True, "discord": True, "email": True})
+check("level 8 starts with exactly enough flags",
+      DEAD.ledger.flags_left == DEAD.ledger.links_left())
+tw = DEAD.ledger.record_turn("telegram", "nothing in this", [])
+res = DEAD.ledger.flag(tw.id)
+check("one wasted flag makes the level arithmetically dead",
+      DEAD.ledger.flags_left < DEAD.ledger.links_left())
+check("so it ends there instead of playing on to nothing",
+      res["ending"] == "SWARMED")
+
+print("   the promotion window swallows input instead of saying the run is over")
+say("telegram", "tg-ADV", "hi", {"name": "Adv", "id": "u-ADV"})
+ADV = hub.by_conv["tg-ADV"]
+ADV.advancing = True
+ADV.ledger.ending = "NAMED"
+before_level = ADV.level_n
+SENT.clear()
+say("telegram", "tg-ADV", "?? hello?", {"name": "Adv", "id": "u-ADV"})
+check("nothing is said into the silence", not sent_to("tg-ADV"))
+say("telegram", "tg-ADV", "reset", {"name": "Adv", "id": "u-ADV"})
+check("and `reset` cannot throw the climb away mid-promotion",
+      ADV.level_n == before_level and ADV.advancing)
+ADV.advancing = False
+ADV.ledger.ending = None
+
 print("   a wrong flag still costs time on the levels that have a clock")
 E.ledger.start_clock()
 was = E.ledger.time_left()
@@ -370,8 +472,9 @@ SENT.clear()
 say("telegram", "tg-group", "hi everyone", {"name": "Pri", "id": "u-P"})
 check("their run did not follow them into the group",
       P.conversations["telegram"] == "tg-P")
-check("and the group was told once",
-      any(t == deck.NOT_IN_PUBLIC["maria"] for t in sent_to("tg-group")))
+check("and they were told how to be recognised, without the word in it",
+      any(t == deck.WRONG_THREAD["maria"] for t in sent_to("tg-group"))
+      and not any(P.code in str(t) for t in sent_to("tg-group")))
 check("no run was opened in the group", "tg-group" not in hub.by_conv)
 
 print("   a bystander who is told to DM can actually start their own game")

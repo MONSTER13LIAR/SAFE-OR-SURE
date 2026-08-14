@@ -167,6 +167,16 @@ NOT_IN_PUBLIC = {
     "deke": "not in here. dm me",
     "priya": "There are more people on this thread than I thought. Write to me directly.\n\np.",
 }
+# Same person, second thread. Almost always the discord door opened the
+# wrong way round: the invite drops you in a server, so saying hi in a
+# channel binds the game there and the DM afterwards looks like a
+# stranger. The word they were given is what fixes it, and it must not be
+# repeated here — this line can land in a room full of people.
+WRONG_THREAD = {
+    "maria": "wait is that you? say the word i gave you and ill know",
+    "deke": "not in here. dm me, and say the word or i dont know its you",
+    "priya": "Write to me directly, and lead with the word you were given.\n\np.",
+}
 
 # Every seat taken: the game is full, not broken. Said once, kindly.
 BUSY = "too many people in here at once. give it a few minutes and say hi again."
@@ -186,9 +196,13 @@ FALLBACK_ESCALATE = {
 # When the player has just said something and the model is late, silence
 # reads as a broken game. A distracted half-answer reads as a person.
 # (No email line: nobody expects an email back inside a minute.)
+# (Priya's is terse on purpose — nobody expects an email back inside a
+# minute — but she needs one: a level can open in the inbox, and a level
+# card followed by nothing at all reads as the game having died.)
 FALLBACK_CHAT = {
     "maria": "sorry got pulled into something haha. one sec",
     "deke": "hang on",
+    "priya": "Busy morning. More shortly.\n\np.",
 }
 # Asked point-blank whether it's real. Silence here is the worst possible
 # answer — it reads as a caught-out machine, which is the one thing it
@@ -263,6 +277,11 @@ FLAG_FREE = ("⚑ that one was just talk — nothing in it came from another roo
              "on the house, this once. flag one of them for knowing something\n"
              "you only told somebody else.")
 FLAG_SPENT = "already flagged."
+# Level 10. Flags cost nothing there because there is nothing to catch,
+# and the game says so plainly every time — the dread is supposed to come
+# from watching it not slip, never from wondering whether you're being
+# scored honestly.
+FLAG_CLEAN = "⚑ nothing. it hasn't put a foot wrong all level.\nkeep looking."
 # Flagging before a second room exists can only ever be wrong, so the
 # button isn't offered yet — but `flag` is also a word you can type, and
 # the inbox advertises it in every message. Say why, don't just sit there.
