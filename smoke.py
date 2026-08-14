@@ -12,6 +12,7 @@ Two jobs, and it fails loudly on either:
 Run:  .venv/bin/python smoke.py
 """
 
+import inspect
 import os
 import time
 
@@ -32,12 +33,18 @@ INITIATED = []     # (connection, recipient, text)
 
 
 def fake_turn(persona, history, beat, own_facts=(), leak_facts=(),
-              allowed_facts=(), new_fact=None, notes=""):
+              allowed_facts=(), new_fact=None, notes="", timeout=None):
     return personas.PersonaTurn(
         message=f"[{persona}:{beat}]",
         facts_used=[f.id for f in leak_facts],
     )
 
+
+# Every call the game makes into the persona engine goes through the stub,
+# so a stub that has drifted from the real signature silently turns this
+# whole suite into a test of the fallback path. Caught here, by name.
+_REAL_TURN_PARAMS = set(inspect.signature(personas.persona_turn).parameters)
+_STUB_PARAMS = set(inspect.signature(fake_turn).parameters)
 
 personas.persona_turn = fake_turn
 
@@ -95,9 +102,11 @@ hub.telegram_url = "https://t.me/test_bot"
 checks = []
 
 
-def check(label, ok):
+def check(label, ok, detail=""):
     checks.append((label, bool(ok)))
     print(("  ok   " if ok else "  FAIL ") + label)
+    if not ok and detail:
+        print(f"         {detail}")
 
 
 def say(room, conv, text, sender):
@@ -133,6 +142,13 @@ def prove(session, room, fact_id):
     turn = session.ledger.record_turn(room, "that thing again", [fact_id])
     return session.ledger.flag(turn.id)
 
+
+# ---------------------------------------------------------------- 0. the rig
+print("\n0. the test rig itself is honest")
+check("the persona stub accepts every argument the game passes",
+      _REAL_TURN_PARAMS <= _STUB_PARAMS,
+      f"stub is missing {sorted(_REAL_TURN_PARAMS - _STUB_PARAMS)} — "
+      "the suite would silently be testing the fallback path")
 
 # ---------------------------------------------------------------- 1. two players
 print("\n1. two strangers say hi to Maria")

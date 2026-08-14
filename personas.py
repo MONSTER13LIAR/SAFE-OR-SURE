@@ -27,6 +27,12 @@ FEATHERLESS_URL = "https://api.featherless.ai/v1/chat/completions"
 # give up early enough that the hand-written fallback still reads as a
 # person replying late rather than as a dead room.
 PERSONA_TIMEOUT = float(os.getenv("PERSONA_TIMEOUT", "45"))
+# The retry runs on a shorter fuse. By the time the first call has timed
+# out, the endpoint has already told us it is having a bad night — waiting
+# another full 45s only deepens the silence the player is sitting in. This
+# takes the worst case from ~92s to ~62s, which is the difference between a
+# persona replying late and a room that looks dead.
+PERSONA_RETRY_TIMEOUT = float(os.getenv("PERSONA_RETRY_TIMEOUT", "15"))
 
 JSON_CONTRACT = (
     'Reply with ONLY a JSON object: {"message": "...", "facts_used": ["id", ...]} '
@@ -132,7 +138,7 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-def _call_featherless(persona: str, prompt: str) -> PersonaTurn:
+def _call_featherless(persona: str, prompt: str, timeout: float | None = None) -> PersonaTurn:
     system = "\n\n".join([voices.SHARED_RULES, voices.VOICE_CARDS[persona], JSON_CONTRACT])
     messages = [
         {"role": "system", "content": system},
@@ -149,7 +155,7 @@ def _call_featherless(persona: str, prompt: str) -> PersonaTurn:
                 "temperature": 0.8,
                 "messages": messages,
             },
-            timeout=PERSONA_TIMEOUT,
+            timeout=timeout or PERSONA_TIMEOUT,
         )
         body = resp.json()
         if "choices" not in body:
@@ -176,14 +182,21 @@ def persona_turn(
     allowed_facts=(),
     new_fact=None,
     notes: str = "",
+    timeout: float | None = None,
 ) -> PersonaTurn:
-    """history: [{"who": "them"|"you", "text": ...}] most recent last."""
+    """history: [{"who": "them"|"you", "text": ...}] most recent last.
+
+    `timeout` overrides the per-call budget for the open endpoint — the
+    caller passes a shorter one on a retry, when the room has already been
+    silent for a while. The Anthropic path ignores it: it is the paid
+    fallback, it is not the endpoint that has slow evenings, and its own
+    SDK owns retries."""
     prompt = _build_prompt(persona, history, beat, own_facts, leak_facts,
                            allowed_facts, new_fact, notes)
     if _anthropic is not None:
         turn = _call_anthropic(persona, prompt)
     else:
-        turn = _call_featherless(persona, prompt)
+        turn = _call_featherless(persona, prompt, timeout=timeout)
 
     # Sanitize the receipt: only ids that exist in the prompt count.
     legal = {f.id for f in (*own_facts, *leak_facts, *allowed_facts)}

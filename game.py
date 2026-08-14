@@ -248,6 +248,11 @@ class Session:
                         persona, self.history[room], beat,
                         own_facts=own, leak_facts=leak_facts,
                         allowed_facts=allowed_facts, new_fact=new_fact, notes=notes,
+                        # Second try runs on a short fuse: the player has
+                        # already been staring at nothing for the length of
+                        # the first timeout. Better a fixed line soon than a
+                        # generated one nobody is still waiting for.
+                        timeout=personas.PERSONA_RETRY_TIMEOUT if attempt == 2 else None,
                     )
                 break
             except Exception as e:
@@ -1735,12 +1740,19 @@ def start_heartbeat(game: Game):
         ping_url = public_url.rstrip("/") + "/state.json"
 
         def pulse():
+            missed = 0
             while True:
                 time.sleep(300)
                 try:
                     urllib.request.urlopen(ping_url, timeout=30).read()
-                except Exception:
-                    pass
+                    missed = 0
+                except Exception as e:
+                    # A silently failing self-ping is how the instance goes
+                    # to sleep between judges without anyone noticing. One
+                    # blip is noise; a run of them is the thing to see in
+                    # the logs, so say it once and then only on each retry.
+                    missed += 1
+                    print(f"!! self-ping failed x{missed} ({type(e).__name__}: {e})")
 
         threading.Thread(target=pulse, daemon=True).start()
         print(f"self-ping every 5 min -> {public_url}")
@@ -1765,7 +1777,12 @@ def main():
     game.start_ticker()
     print("\nSAFE OR SURE — listening. say hi to any room to start. ctrl-c to stop\n")
     try:
-        client.listen()
+        # The SDK retries a failed poll forever with exponential backoff,
+        # which is what we want — but its default ceiling is 30s, and a
+        # gateway wobble during a judged run would leave somebody's message
+        # sitting unread for half a minute. Cap it low: this game is people
+        # waiting on a reply, not a batch worker.
+        client.listen(max_backoff=8.0)
     except KeyboardInterrupt:
         raise
     except Exception as e:
