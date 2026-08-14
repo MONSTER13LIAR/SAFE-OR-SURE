@@ -354,6 +354,14 @@ decoy_turn = D.ledger.record_turn("discord", "[deke:decoy]", [])
 check("flagging a decoy is noise, not a link",
       D.ledger.flag(decoy_turn.id)["verdict"] in ("noise", "free"))
 
+# A level that is mostly decoys must still hand out ammunition, or the
+# player runs out of facts to plant and starves the leaks they need.
+decisions = [D.director.on_player_message("discord", "ok") for _ in range(12)]
+decoys = [d for d in decisions if d["beat"] == "decoy"]
+check("a heavy decoy level still produces decoys", bool(decoys))
+check("and they still carry plant buttons",
+      any(d.get("offer_plants") for d in decoys) or not D.mind.unplanted())
+
 # ---------------------------------------------------------------- 12. privacy
 print("\n12. a private run is never dragged into a public thread")
 say("telegram", "tg-P", "hi", {"name": "Pri", "id": "u-P"})

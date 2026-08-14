@@ -170,7 +170,13 @@ class Session:
         if alive:
             self.ledger.alive.update(alive)
             self.ledger.opened.update(opened)
+        was = getattr(self, "director", None)
         self.director = Director(self)
+        if was is not None and keep_rooms:
+            # Which room the player is actually holding survives the level.
+            # Without this the new Director defaults to telegram and the
+            # clock warnings go shouting into a room nobody is looking at.
+            self.director.last_room = was.last_room
 
     @property
     def level(self):

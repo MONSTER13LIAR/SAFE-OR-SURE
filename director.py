@@ -219,12 +219,18 @@ class Director:
                 self.last_leak_at = time.time()
                 return {"beat": "leak", "leak_facts": [pick[1]],
                         "notes": self._leak_notes()}
+        # Plants are the player's ammunition, and on the high levels most
+        # replies are decoys — so the offer has to ride on those too. Held
+        # back, a level-8 player gets buttons on three turns in ten, plants
+        # almost nothing, and starves the very leaks they need to catch.
+        offer = bool(self.mind.unplanted()) and (
+            len(self.mind.planted()) < 3 or self.chat_count[room] % 2 == 0)
         # No leak available for this room this turn. On the harder levels
         # the silence is filled with something that looks exactly like one.
         if random.random() < self.level.decoy_chance:
             bait = self._pick_decoy()
             if bait:
-                return {"beat": "decoy", "notes": bait}
+                return {"beat": "decoy", "notes": bait, "offer_plants": offer}
         # The harvest: this room asks for the player's email so Priya can
         # find them. Only while email is a stranger's door and we know no
         # address; at most twice, and never so early it feels like a form.
@@ -251,8 +257,6 @@ class Director:
         # Early on they come with every reply — the first run must never
         # reach a turn where the screen offers nothing to do — and settle
         # into every other turn once there's a game to play.
-        offer = bool(self.mind.unplanted()) and (
-            len(self.mind.planted()) < 3 or self.chat_count[room] % 2 == 0)
         return {"beat": "chat", "offer_plants": offer}
 
     def note_phrase(self, room: str, text: str):
