@@ -1,0 +1,722 @@
+<title>Safe or Sure Mechanics</title>
+
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --ink: #e8e6e1;
+    --dim: #85837e;
+    --faint: #3a3a40;
+    --accent: #e8a13a;
+    --panel: #131316;
+
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+            "Helvetica Neue", Arial, sans-serif;
+
+    --step: clamp(1.5rem, 4vw, 3rem);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: clamp(15px, 1.05vw + 12px, 18px);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 var(--step);
+  }
+
+  /* ---------------------------------------------------------- type */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .7rem;
+    letter-spacing: .34em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 1.1rem;
+  }
+
+  h1 {
+    font-family: var(--mono);
+    font-weight: 400;
+    font-size: clamp(1.6rem, 5.2vw, 3.4rem);
+    letter-spacing: .3em;
+    line-height: 1.15;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  h2 {
+    font-family: var(--mono);
+    font-weight: 400;
+    font-size: clamp(1.15rem, 2.2vw, 1.6rem);
+    letter-spacing: .16em;
+    line-height: 1.3;
+    margin: 0 0 .9rem;
+    text-wrap: balance;
+  }
+
+  p { margin: 0 0 1rem; max-width: 64ch; color: var(--ink); }
+  p.sub { color: var(--dim); }
+  .lede { font-size: 1.08em; max-width: 60ch; }
+
+  b, strong { font-weight: 600; color: var(--ink); }
+  .amber { color: var(--accent); }
+  .mono { font-family: var(--mono); letter-spacing: .04em; }
+
+  /* ---------------------------------------------------------- sections */
+  section {
+    border-top: 1px solid var(--faint);
+    padding: calc(var(--step) * 1.5) 0;
+  }
+  section:first-of-type { border-top: 0; }
+
+  .head {
+    display: flex;
+    gap: 1.1rem;
+    align-items: baseline;
+    margin-bottom: 1.6rem;
+  }
+  .num {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .18em;
+    color: var(--accent);
+    flex: none;
+    padding-top: .35em;
+  }
+
+  figure {
+    margin: 1.8rem 0 0;
+    padding: 0;
+  }
+  .scroller { overflow-x: auto; padding-bottom: .4rem; }
+  svg.fig {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    min-width: 540px;
+  }
+  figcaption {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .07em;
+    color: var(--dim);
+    margin-top: 1rem;
+    line-height: 1.65;
+    max-width: 70ch;
+  }
+
+  /* svg shared */
+  .fig text { font-family: var(--mono); fill: var(--ink); }
+  .lbl { font-size: 12px; letter-spacing: .06em; }
+  .lbl-sm { font-size: 10.5px; letter-spacing: .09em; fill: var(--dim); }
+  .lbl-tag { font-size: 10px; letter-spacing: .16em; fill: var(--dim); }
+  .box { fill: var(--panel); stroke: var(--faint); stroke-width: 1; }
+  .box-live { fill: var(--panel); stroke: var(--dim); stroke-width: 1; }
+  .box-hot { fill: rgba(232,161,58,.09); stroke: var(--accent); stroke-width: 1.2; }
+  .edge { stroke: var(--faint); stroke-width: 1.4; fill: none; }
+  .edge-live { stroke: var(--dim); stroke-width: 1.4; fill: none; }
+  .edge-hot { stroke: var(--accent); stroke-width: 1.8; fill: none; }
+
+  /* ---------------------------------------------------------- hero */
+  .hero {
+    padding: calc(var(--step) * 2.1) 0 calc(var(--step) * 1.4);
+  }
+  .hero .thesis {
+    font-family: var(--mono);
+    font-size: clamp(.82rem, 1.5vw, 1rem);
+    letter-spacing: .12em;
+    color: var(--dim);
+    margin: 1.8rem 0 0;
+    max-width: 52ch;
+    line-height: 1.9;
+  }
+  .hero .thesis .amber { letter-spacing: .12em; }
+
+  .constellation {
+    margin-top: calc(var(--step) * 1.2);
+    display: flex;
+    justify-content: flex-start;
+  }
+  .constellation svg { width: min(430px, 100%); height: auto; }
+
+  .cnode circle { fill: none; stroke: var(--dim); stroke-width: 1.6; }
+  .cnode text { font-size: 10px; letter-spacing: .18em; fill: var(--dim); }
+  .clink {
+    stroke: var(--accent);
+    stroke-width: 1.6;
+    stroke-dasharray: 200;
+    stroke-dashoffset: 200;
+    animation: draw 7s ease-in-out infinite;
+  }
+  .clink.b { animation-delay: 1.5s; }
+  .cnode.woven circle { animation: woven 7s ease-in-out infinite; }
+  .cnode.woven.b circle { animation-delay: 1.5s; }
+  @keyframes draw {
+    0%, 6%   { stroke-dashoffset: 200; }
+    26%, 74% { stroke-dashoffset: 0; }
+    94%,100% { stroke-dashoffset: 200; }
+  }
+  @keyframes woven {
+    0%, 14%  { fill: transparent; stroke: var(--dim); }
+    30%, 74% { fill: var(--accent); stroke: var(--accent); }
+    90%,100% { fill: transparent; stroke: var(--dim); }
+  }
+
+  /* ---------------------------------------------------------- loop pulse */
+  .pulse { fill: var(--accent); }
+
+  .flow-dash {
+    stroke-dasharray: 5 7;
+    animation: march 1.6s linear infinite;
+  }
+  @keyframes march { to { stroke-dashoffset: -24; } }
+
+  /* ---------------------------------------------------------- ladder */
+  .ladder {
+    margin-top: 1.8rem;
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: clamp(.66rem, 1.15vw, .82rem);
+    letter-spacing: .05em;
+    font-variant-numeric: tabular-nums;
+  }
+  .ladder th {
+    text-align: left;
+    font-weight: 400;
+    color: var(--dim);
+    font-size: .82em;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    padding: 0 .8em .7em 0;
+    border-bottom: 1px solid var(--faint);
+    white-space: nowrap;
+  }
+  .ladder td {
+    padding: .62em .8em .62em 0;
+    border-bottom: 1px solid rgba(58,58,64,.5);
+    vertical-align: middle;
+    color: var(--dim);
+  }
+  .ladder td.n { color: var(--ink); letter-spacing: .14em; width: 1%; white-space: nowrap; }
+  .ladder td.style { color: var(--ink); letter-spacing: .02em; line-height: 1.5; }
+  .ladder tr.top td { color: var(--accent); }
+  .ladder tr.top td.style { color: var(--accent); }
+  .bar {
+    display: inline-block;
+    height: 7px;
+    background: var(--accent);
+    vertical-align: middle;
+    min-width: 2px;
+  }
+  .bar.cool { background: var(--faint); }
+  .barwrap { display: flex; align-items: center; gap: .6em; white-space: nowrap; }
+
+  /* ---------------------------------------------------------- endings */
+  .ends {
+    margin-top: 1.8rem;
+    display: grid;
+    gap: 1px;
+    background: var(--faint);
+    border: 1px solid var(--faint);
+    grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  }
+  .end {
+    background: var(--bg);
+    padding: 1.2rem 1.15rem 1.3rem;
+  }
+  .end .name {
+    font-family: var(--mono);
+    font-size: .78rem;
+    letter-spacing: .2em;
+    color: var(--ink);
+    margin-bottom: .5rem;
+  }
+  .end.win .name { color: var(--accent); }
+  .end .how {
+    font-size: .84rem;
+    color: var(--dim);
+    line-height: 1.55;
+    margin: 0;
+    max-width: none;
+  }
+
+  /* ---------------------------------------------------------- closer */
+  .closer {
+    border-top: 1px solid var(--faint);
+    padding: calc(var(--step) * 1.9) 0 calc(var(--step) * 2.2);
+  }
+  .closer .line {
+    font-family: var(--mono);
+    font-size: clamp(1rem, 2.6vw, 1.7rem);
+    letter-spacing: .17em;
+    line-height: 1.55;
+    margin: 0;
+    max-width: 24ch;
+  }
+  .closer .where {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .16em;
+    color: var(--dim);
+    margin-top: 2rem;
+  }
+  .closer .where .amber { color: var(--accent); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .clink, .cnode.woven circle, .flow-dash { animation: none; }
+    .clink { stroke-dashoffset: 0; }
+    .cnode.woven circle { fill: var(--accent); stroke: var(--accent); }
+    /* SMIL can't be stopped from CSS, so the travelling dot is simply
+       withdrawn — every diagram reads without it. */
+    .pulse { display: none; }
+  }
+</style>
+
+<div class="wrap">
+
+  <!-- ============================================ hero -->
+  <header class="hero">
+    <p class="eyebrow">One agent · three names · one handler</p>
+    <h1>SAFE OR SURE</h1>
+    <p class="thesis">
+      Three strangers message you on Telegram, Discord and email.<br>
+      They are <span class="amber">one agent</span>, one memory, one handler.<br>
+      The whole game is proving it.
+    </p>
+
+    <div class="constellation">
+      <svg viewBox="0 0 400 150" role="img"
+           aria-label="Three room nodes; two of them join with an amber link and fill in.">
+        <line class="clink" x1="72" y1="52" x2="200" y2="112"></line>
+        <line class="clink b" x1="200" y1="112" x2="328" y2="52"></line>
+
+        <g class="cnode woven">
+          <circle cx="72" cy="52" r="11"></circle>
+          <text x="72" y="82" text-anchor="middle">TELEGRAM</text>
+          <text x="72" y="97" text-anchor="middle">MARIA</text>
+        </g>
+        <g class="cnode woven b">
+          <circle cx="200" cy="112" r="11"></circle>
+          <text x="200" y="142" text-anchor="middle">DISCORD</text>
+        </g>
+        <g class="cnode">
+          <circle cx="328" cy="52" r="11"></circle>
+          <text x="328" y="82" text-anchor="middle">EMAIL</text>
+          <text x="328" y="97" text-anchor="middle">PRIYA</text>
+        </g>
+      </svg>
+    </div>
+  </header>
+
+  <!-- ============================================ 1. the shape -->
+  <section>
+    <div class="head">
+      <div class="num">01</div>
+      <div>
+        <h2>Channels are transports, not identities</h2>
+        <p class="lede sub">
+          The handler never asks which app a message came from. Rooms are
+          connection ids, and all three personas read the same memory — so
+          a fact you gave one of them is a fact the other two <em>can</em> use.
+          That is the leak, and it is also the evidence.
+        </p>
+      </div>
+    </div>
+
+    <figure>
+      <div class="scroller">
+        <svg class="fig" viewBox="0 0 900 300" role="img"
+             aria-label="Three channels converge on one handler, which reads one shared Mind; the Mind tags every fact with the room it was disclosed in.">
+          <defs>
+            <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#85837e"></path>
+            </marker>
+            <marker id="a1h" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#e8a13a"></path>
+            </marker>
+          </defs>
+
+          <text class="lbl-tag" x="20" y="26">THE PLAYER'S PHONE</text>
+          <rect class="box-live" x="20" y="44" width="176" height="52"></rect>
+          <text class="lbl" x="36" y="68">Telegram</text>
+          <text class="lbl-sm" x="36" y="85">Maria</text>
+
+          <rect class="box-live" x="20" y="120" width="176" height="52"></rect>
+          <text class="lbl" x="36" y="144">Discord</text>
+          <text class="lbl-sm" x="36" y="161">Deke</text>
+
+          <rect class="box-live" x="20" y="196" width="176" height="52"></rect>
+          <text class="lbl" x="36" y="220">Email</text>
+          <text class="lbl-sm" x="36" y="237">Priya — no block button</text>
+
+          <path class="edge-live" d="M 196 70 L 300 70 L 300 146" marker-end="url(#a1)"></path>
+          <path class="edge-live" d="M 196 146 L 300 146" marker-end="url(#a1)"></path>
+          <path class="edge-live" d="M 196 222 L 300 222 L 300 152" marker-end="url(#a1)"></path>
+
+          <rect class="box-hot" x="330" y="118" width="190" height="58"></rect>
+          <text class="lbl" x="425" y="142" text-anchor="middle" fill="#e8a13a">ONE HANDLER</text>
+          <text class="lbl-sm" x="425" y="160" text-anchor="middle">never branches on channel</text>
+
+          <path class="edge-hot" d="M 520 147 L 596 147" marker-end="url(#a1h)"></path>
+
+          <rect class="box" x="596" y="44" width="284" height="76"></rect>
+          <text class="lbl" x="616" y="70">THE MIND</text>
+          <text class="lbl-sm" x="616" y="90">one fact store, shared by all three</text>
+          <text class="lbl-sm" x="616" y="107">every fact tagged with its origin room</text>
+
+          <rect class="box" x="596" y="132" width="284" height="60"></rect>
+          <text class="lbl" x="616" y="157">THE DIRECTOR</text>
+          <text class="lbl-sm" x="616" y="176">picks who speaks, and what may leak</text>
+
+          <rect class="box" x="596" y="204" width="284" height="60"></rect>
+          <text class="lbl" x="616" y="229">THE LEDGER</text>
+          <text class="lbl-sm" x="616" y="248">links, flags, clock — plain Python</text>
+
+          <path class="edge" d="M 560 147 L 560 74 L 596 74"></path>
+          <path class="edge" d="M 560 147 L 560 234 L 596 234"></path>
+        </svg>
+      </div>
+      <figcaption>
+        Remove Caspian and the win condition stops existing: there is nothing
+        left to prove.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================ 2. the loop -->
+  <section>
+    <div class="head">
+      <div class="num">02</div>
+      <div>
+        <h2>The loop</h2>
+        <p class="lede sub">
+          You feed one fact to one person. Seconds later somebody else knows it.
+          Catching that is the entire verb set — and catching it doesn't end the
+          run, it promotes you.
+        </p>
+      </div>
+    </div>
+
+    <figure>
+      <div class="scroller">
+        <svg class="fig" viewBox="0 0 900 330" role="img"
+             aria-label="A cycle: plant a fact in one room, the Director leaks it to another, the player flags it, the Ledger checks provenance, and a correct flag promotes the player to the next level.">
+          <defs>
+            <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#85837e"></path>
+            </marker>
+            <marker id="a2h" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#e8a13a"></path>
+            </marker>
+            <path id="loopline"
+                  d="M 150 96 L 330 96 L 330 96 L 470 96 L 640 96 L 640 200 L 450 200 L 150 200 L 150 110"></path>
+          </defs>
+
+          <!-- step 1 -->
+          <rect class="box-live" x="30" y="66" width="150" height="60"></rect>
+          <text class="lbl-tag" x="40" y="58">01 · YOU</text>
+          <text class="lbl" x="46" y="92">PLANT</text>
+          <text class="lbl-sm" x="46" y="110">one fact → one room</text>
+
+          <path class="edge-live flow-dash" d="M 180 96 L 296 96" marker-end="url(#a2)"></path>
+          <text class="lbl-sm" x="238" y="86" text-anchor="middle">tagged: origin = telegram</text>
+
+          <!-- step 2 -->
+          <rect class="box-live" x="296" y="66" width="170" height="60"></rect>
+          <text class="lbl-tag" x="306" y="58">02 · THE DIRECTOR</text>
+          <text class="lbl" x="312" y="92">LEAK</text>
+          <text class="lbl-sm" x="312" y="110">a different room says it</text>
+
+          <path class="edge-live flow-dash" d="M 466 96 L 596 96" marker-end="url(#a2)"></path>
+          <text class="lbl-sm" x="531" y="86" text-anchor="middle">6–40s later, depending on level</text>
+
+          <!-- step 3 -->
+          <rect class="box-hot" x="596" y="66" width="150" height="60"></rect>
+          <text class="lbl-tag" x="606" y="58">03 · YOU</text>
+          <text class="lbl" x="612" y="92" fill="#e8a13a">⚑ FLAG IT</text>
+          <text class="lbl-sm" x="612" y="110">or don't. clock's running</text>
+
+          <path class="edge-hot" d="M 671 126 L 671 168 L 560 168" marker-end="url(#a2h)"></path>
+
+          <!-- step 4 -->
+          <rect class="box" x="360" y="168" width="200" height="64"></rect>
+          <text class="lbl-tag" x="370" y="160">04 · THE LEDGER</text>
+          <text class="lbl" x="376" y="196">PROVENANCE CHECK</text>
+          <text class="lbl-sm" x="376" y="214">plain Python. no LLM judges you</text>
+
+          <path class="edge-hot" d="M 360 200 L 180 200" marker-end="url(#a2h)"></path>
+          <text class="lbl-sm" x="270" y="190" text-anchor="middle">link proven</text>
+
+          <!-- step 5 -->
+          <rect class="box-hot" x="30" y="168" width="150" height="64"></rect>
+          <text class="lbl-tag" x="40" y="160">05</text>
+          <text class="lbl" x="46" y="196" fill="#e8a13a">NAMED IT</text>
+          <text class="lbl-sm" x="46" y="214">→ next level, harder</text>
+
+          <path class="edge-hot" d="M 105 232 L 105 268 L 700 268 L 700 132"
+                marker-end="url(#a2h)" stroke-dasharray="4 6"></path>
+          <text class="lbl-sm" x="402" y="284" text-anchor="middle">
+            it comes back. ten times.
+          </text>
+
+          <circle class="pulse" r="4.5">
+            <animateMotion dur="9s" repeatCount="indefinite"
+                           path="M 180 96 L 671 96 L 671 168 L 460 168 L 460 200 L 180 200"></animateMotion>
+            <animate attributeName="opacity" dur="9s" repeatCount="indefinite"
+                     values="0;1;1;0" keyTimes="0;0.05;0.93;1"></animate>
+          </circle>
+        </svg>
+      </div>
+      <figcaption>
+        The flag is scored by asking one question in code: did this message use a
+        fact whose origin room is a different, still-living room? Nothing generated
+        decides whether you were right.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================ 3. leak vs decoy -->
+  <section>
+    <div class="head">
+      <div class="num">03</div>
+      <div>
+        <h2>Why a decoy can never be a false accusation</h2>
+        <p class="lede sub">
+          From level 3 the personas start talking about things out of their own
+          lives that sound exactly like something you said. The difference isn't
+          judgement — it's what was in the prompt.
+        </p>
+      </div>
+    </div>
+
+    <figure>
+      <div class="scroller">
+        <svg class="fig" viewBox="0 0 900 300" role="img"
+             aria-label="A real leak is given the fact id, so the id comes back in facts_used and scores a link. A decoy is never given an id, so no id can come back and the flag scores as noise.">
+          <defs>
+            <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#85837e"></path>
+            </marker>
+            <marker id="a3h" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#e8a13a"></path>
+            </marker>
+          </defs>
+
+          <!-- real leak -->
+          <text class="lbl-tag" x="20" y="30" fill="#e8a13a">A REAL LEAK</text>
+          <rect class="box-hot" x="20" y="46" width="212" height="66"></rect>
+          <text class="lbl" x="34" y="70">prompt carries</text>
+          <text class="lbl" x="34" y="90" fill="#e8a13a">fact id: mangoes</text>
+
+          <path class="edge-hot" d="M 232 79 L 322 79" marker-end="url(#a3h)"></path>
+
+          <rect class="box-live" x="322" y="46" width="236" height="66"></rect>
+          <text class="lbl-sm" x="336" y="70">"whats the mango situation</text>
+          <text class="lbl-sm" x="336" y="88">over there"</text>
+
+          <path class="edge-hot" d="M 558 79 L 648 79" marker-end="url(#a3h)"></path>
+
+          <rect class="box-hot" x="648" y="46" width="232" height="66"></rect>
+          <text class="lbl-sm" x="662" y="70">facts_used = ["mangoes"]</text>
+          <text class="lbl" x="662" y="92" fill="#e8a13a">⚑ → LINK</text>
+
+          <line x1="20" y1="150" x2="880" y2="150" stroke="#3a3a40" stroke-width="1"></line>
+
+          <!-- decoy -->
+          <text class="lbl-tag" x="20" y="188">A DECOY</text>
+          <rect class="box" x="20" y="204" width="212" height="66"></rect>
+          <text class="lbl" x="34" y="228">prompt carries</text>
+          <text class="lbl" x="34" y="248">only the words</text>
+
+          <path class="edge" d="M 232 237 L 322 237" marker-end="url(#a3)"></path>
+
+          <rect class="box-live" x="322" y="204" width="236" height="66"></rect>
+          <text class="lbl-sm" x="336" y="228">"my printer's been eating</text>
+          <text class="lbl-sm" x="336" y="246">paper all week"</text>
+
+          <path class="edge" d="M 558 237 L 648 237" marker-end="url(#a3)"></path>
+
+          <rect class="box" x="648" y="204" width="232" height="66"></rect>
+          <text class="lbl-sm" x="662" y="228">facts_used = [ ]</text>
+          <text class="lbl" x="662" y="250">⚑ → NOISE</text>
+        </svg>
+      </div>
+      <figcaption>
+        The id is never put in the prompt for a decoy, so it cannot come back in
+        the receipt, so a flag on it scores as noise mechanically — not because
+        something decided you were wrong.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================ 4. the ladder -->
+  <section>
+    <div class="head">
+      <div class="num">04</div>
+      <div>
+        <h2>The ladder</h2>
+        <p class="lede sub">
+          Every level is one frozen row of numbers plus a single sentence of stage
+          direction handed straight to the persona. Same beat, same model, same
+          fact — ten different games. Difficulty is a table you can read, not a
+          thing you infer.
+        </p>
+      </div>
+    </div>
+
+    <div class="scroller">
+      <table class="ladder">
+        <thead>
+          <tr>
+            <th>Lvl</th>
+            <th>Flags</th>
+            <th>Clock</th>
+            <th>It leaks by</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="n">01</td>
+            <td><span class="barwrap"><span class="bar" style="width:60px"></span>6</span></td>
+            <td>none</td>
+            <td class="style">saying it almost word for word</td>
+          </tr>
+          <tr>
+            <td class="n">02</td>
+            <td><span class="barwrap"><span class="bar" style="width:50px"></span>5</span></td>
+            <td>5:00</td>
+            <td class="style">mentioning it plainly, in passing</td>
+          </tr>
+          <tr>
+            <td class="n">03</td>
+            <td><span class="barwrap"><span class="bar" style="width:50px"></span>5</span></td>
+            <td>4:30</td>
+            <td class="style">paraphrasing — same thing, none of your words</td>
+          </tr>
+          <tr>
+            <td class="n">04</td>
+            <td><span class="barwrap"><span class="bar" style="width:40px"></span>4</span></td>
+            <td>4:00</td>
+            <td class="style">half-remembering it, unsure of the detail</td>
+          </tr>
+          <tr>
+            <td class="n">05</td>
+            <td><span class="barwrap"><span class="bar" style="width:40px"></span>4</span></td>
+            <td>3:30</td>
+            <td class="style">burying it mid-sentence — free mistakes end here</td>
+          </tr>
+          <tr>
+            <td class="n">06</td>
+            <td><span class="barwrap"><span class="bar" style="width:30px"></span>3</span></td>
+            <td>3:10</td>
+            <td class="style">one clause, then moving straight on</td>
+          </tr>
+          <tr>
+            <td class="n">07</td>
+            <td><span class="barwrap"><span class="bar" style="width:30px"></span>3</span></td>
+            <td>2:50</td>
+            <td class="style">implying it, never stating it</td>
+          </tr>
+          <tr>
+            <td class="n">08</td>
+            <td><span class="barwrap"><span class="bar" style="width:20px"></span>2</span></td>
+            <td>2:30</td>
+            <td class="style">using a detail from <em>around</em> the thing</td>
+          </tr>
+          <tr>
+            <td class="n">09</td>
+            <td><span class="barwrap"><span class="bar" style="width:20px"></span>2</span></td>
+            <td>2:10</td>
+            <td class="style">saying it and taking it back in the same breath</td>
+          </tr>
+          <tr class="top">
+            <td class="n">10</td>
+            <td><span class="barwrap"><span class="bar" style="width:20px"></span>2</span></td>
+            <td>1:50</td>
+            <td class="style">putting the detail in somebody else's mouth</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <figcaption style="margin-top:1.2rem">
+      Level 10 gives you two flags for two links — no margin at all. Being wrong
+      once ends the climb. It can be won; nobody has won it yet.
+    </figcaption>
+  </section>
+
+  <!-- ============================================ 5. endings -->
+  <section>
+    <div class="head">
+      <div class="num">05</div>
+      <div>
+        <h2>Five ways it ends</h2>
+        <p class="lede sub">
+          Whatever happens, the case file lands in your inbox: how far you climbed,
+          every leak you caught, every one that was on your screen and you missed —
+          with the timestamp — and a door-by-door portrait of what it knew about you.
+        </p>
+      </div>
+    </div>
+
+    <div class="ends">
+      <div class="end win">
+        <div class="name">NAMED IT</div>
+        <p class="how">You proved the level's links. All three rooms cut out
+          mid-sentence — and a couple of seconds later, they start again, harder.</p>
+      </div>
+      <div class="end win">
+        <div class="name">NAMED IT AT TEN</div>
+        <p class="how">You did it on the last rung. The climb is over. There is
+          nothing above this.</p>
+      </div>
+      <div class="end">
+        <div class="name">TEN</div>
+        <p class="how">You reached the top and ran the clock out without naming it.
+          It kept its receipts. Second-best thing there is.</p>
+      </div>
+      <div class="end">
+        <div class="name">CORNERED</div>
+        <p class="how">You sealed your way to safety until winning was impossible.
+          Every unproven link through a blocked room burns with it.</p>
+      </div>
+      <div class="end">
+        <div class="name">SWARMED</div>
+        <p class="how">Out of flags. It isn't angry — it just stops pretending.</p>
+      </div>
+      <div class="end">
+        <div class="name">OUTRUN</div>
+        <p class="how">Out of clock. You weren't wrong, you were slow, and it was
+          never in a hurry.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ closer -->
+  <footer class="closer">
+    <p class="line">You can be safe<br>or you can be sure.<br><span class="amber">Not both.</span></p>
+    <p class="where">
+      LIVE · <span class="amber">safe-or-sure.onrender.com</span><br>
+      TELEGRAM · DISCORD · EMAIL — one Caspian handler, free to play
+    </p>
+  </footer>
+
+</div>
