@@ -673,6 +673,21 @@ class Session:
             t.join(timeout=30)
 
     # ------------------------------------------------------------ inbound
+    def _answer(self, room, message, text):
+        """Say it in the thread they wrote in, and if the gateway refuses
+        the reply, still say it. These four moments — reset, a run that is
+        already over, a flag thrown too early — are all cases where the
+        player has just done something deliberate and is watching for an
+        answer. Dropping one on a failed reply reads as the game crashing,
+        which is the one impression the whole run is built to avoid."""
+        if message is not None:
+            try:
+                message.reply(text=text)
+                return
+            except Exception as e:
+                print(f"!! reply failed ({room}): {e}")
+        self.send_text(room, text)
+
     def handle_message(self, room, message, key=None):
         """The player of THIS run said something in one of their rooms.
         Routing already decided the run; nothing here can reach another."""
@@ -709,7 +724,7 @@ class Session:
             return
         if text.lower() in ("reset", "/reset"):
             self.restart()
-            message.reply(text=deck.RESET_OK)
+            self._answer(room, message, deck.RESET_OK)
             return
         if text.lower() == "/start":
             # Telegram sends this when the player taps Start. After a run
@@ -717,11 +732,11 @@ class Session:
             # the literal slash-command must never reach a persona.
             if self.ledger.ending:
                 self.restart()
-                message.reply(text=deck.RESET_OK)
+                self._answer(room, message, deck.RESET_OK)
                 return
             text = "hi"
         if self.ledger.ending:
-            message.reply(text=deck.AFTER_END)
+            self._answer(room, message, deck.AFTER_END)
             return
         if text.lower() in ("flag", "⚑"):  # text fallback (email has no buttons everywhere)
             latest = self.ledger.latest_turn(room)
@@ -732,7 +747,7 @@ class Session:
                 # message can be a link, so flagging can only cost. Silence
                 # here would be the worst answer — the email room prints
                 # "reply `flag`" in every message it sends.
-                message.reply(text=deck.FLAG_TOO_EARLY)
+                self._answer(room, message, deck.FLAG_TOO_EARLY)
             return
         # ...and the other half of that fallback: a bare fact name plants it.
         # Without this the inbox — the one room that can never be sealed —
@@ -1477,9 +1492,24 @@ class Game:
             s.last_seen = time.time()
             return s
 
+    def _is_own_address(self, message) -> bool:
+        """Mail that claims to come from our own address. A bounce, an
+        out-of-office loop or a forwarding rule would otherwise open a run
+        and the game would start playing itself: real model calls on a free
+        endpoint, and a phantom player sitting on the public board in front
+        of judges. The player TYPING this address is already refused in
+        `_scan_for_email`; this is the other direction."""
+        s = getattr(message, "sender", None) or {}
+        addr = norm_handle(s.get("address") or "")
+        return bool(addr and self.game_email
+                    and addr == norm_handle(self.game_email))
+
     def on_message(self, message):
         room = self.conn_to_room.get(message.connection_id)
         if room is None:
+            return
+        if self._is_own_address(message):
+            print(f"<- [{room}] ignored a message from our own address")
             return
         conv = message.conversation_id
         key, _ = self._identity(message)

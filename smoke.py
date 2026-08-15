@@ -647,6 +647,44 @@ say("email", "em-M", "ok what else", {"name": "Mail", "address": "mail@example.c
 check("email messages carry the words for the taps",
       any("no buttons in email" in str(t) for t in sent_to("em-M")))
 
+# ------------------------------------------------- 19. a refusing gateway
+print("\n19. a gateway that refuses replies still gets the words out")
+
+
+class DeadReplyMsg(Msg):
+    """Sends work; reply() does not. Seen live as a transient gateway
+    error. The moments that use reply() are the deliberate ones — reset,
+    a run that is already over — so dropping them looks like a crash."""
+
+    def reply(self, text=None, blocks=None):
+        raise RuntimeError("gateway refused reply")
+
+
+hub.on_message(DeadReplyMsg(CONN["telegram"], "tg-R", "hi",
+                            {"name": "Refus", "id": "u-R"}))
+time.sleep(0.4)
+R = hub.by_conv["tg-R"]
+R.ledger.ending = "SWARMED"
+SENT.clear()
+hub.on_message(DeadReplyMsg(CONN["telegram"], "tg-R", "hello?",
+                            {"name": "Refus", "id": "u-R"}))
+time.sleep(0.3)
+check("a run that is over still says so", deck.AFTER_END in sent_to("tg-R"))
+SENT.clear()
+hub.on_message(DeadReplyMsg(CONN["telegram"], "tg-R", "reset",
+                            {"name": "Refus", "id": "u-R"}))
+time.sleep(0.3)
+check("reset is still acknowledged", deck.RESET_OK in sent_to("tg-R"))
+check("and the run really did restart", R.ledger.ending is None)
+
+# ------------------------------------------------- 20. we never talk to ourselves
+print("\n20. the game's own address cannot open a run")
+before = len(hub.live())
+say("email", "em-LOOP", "delivery status notification (failure)",
+    {"address": hub.game_email, "name": "MAILER-DAEMON"})
+check("a bounce from our own address is ignored",
+      hub.by_conv.get("em-LOOP") is None and len(hub.live()) == before)
+
 # ---------------------------------------------------------------- report
 bad = [label for label, ok in checks if not ok]
 print(f"\n{len(checks) - len(bad)}/{len(checks)} checks passed")
